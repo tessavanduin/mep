@@ -18,7 +18,7 @@ geometry, cell = simulation_domain.geometry, simulation_domain.cell
 resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
 print(f"RESOLUTION: {resolution} = {426/resolution} nm")
 
-dpml = thickness    # PML thickness (y direction only)
+dpml = thickness    # PML thickness
 pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
 
 sim = mp.Simulation(cell_size=cell,
@@ -48,13 +48,6 @@ sim.use_output_directory()
 
 sim.run(mp.at_beginning(mp.output_epsilon),
     move_source,
-    mp.to_appended("ex", mp.output_efield_x),
+    mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x,cell.y)), mp.output_efield_x)),
     until=cell.x / electron_v,
 )
-
-
-# sim.run(mp.at_beginning(mp.output_epsilon),
-#     move_source,
-#     mp.output_png(mp.Hz, "-0 -z 0 -Zc dkbluered -C EELS_3D-out/EELS_3D-eps-000000.00.h5"),
-#     until=cell.x / electron_v,
-# )
