@@ -1,6 +1,6 @@
 import meep as mp
 import numpy as np
-from geometries import SlottedTriangleLattice
+from geometries import *
 from helper_functions import E_to_speed
 
 # Some parameters to describe the geometry:
@@ -11,7 +11,7 @@ r = 0.255           # Radius of holes, r = 0.255*a
 shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
 sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
-simulation_domain = SlottedTriangleLattice(r, a, thickness, shift, sw, index=3.45)
+simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45)
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
 # resolution of 18 nm
@@ -22,7 +22,7 @@ dpml = thickness    # PML thickness (y direction only)
 pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
 
 sim = mp.Simulation(cell_size=cell,
-                    geometry=geometry,
+                    geometry=None,
                     boundary_layers=pml_layers,
                     symmetries=None,
                     resolution=resolution)
@@ -48,6 +48,13 @@ sim.use_output_directory()
 
 sim.run(mp.at_beginning(mp.output_epsilon),
     move_source,
-    mp.output_png(mp.Hz, "-0 -z 0 -Zc dkbluered -C EELS_3D-out/EELS_3D-eps-000000.00.h5"),
+    mp.to_appended("ex", mp.output_efield_x),
     until=cell.x / electron_v,
 )
+
+
+# sim.run(mp.at_beginning(mp.output_epsilon),
+#     move_source,
+#     mp.output_png(mp.Hz, "-0 -z 0 -Zc dkbluered -C EELS_3D-out/EELS_3D-eps-000000.00.h5"),
+#     until=cell.x / electron_v,
+# )
