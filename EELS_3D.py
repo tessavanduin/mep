@@ -7,7 +7,7 @@ from helper_functions import E_to_speed
 a = 1               # Lattice constant
 h = np.sqrt(3)*a    # Unit cell height
 thickness = 220/426 # Slab thickness 
-r = 0.255           # Radius of holes, r = 0.255*a
+r = 0.245           # Radius of holes, r = 0.245*a
 shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
 sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
@@ -22,7 +22,7 @@ dpml = thickness    # PML thickness
 pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
 
 sim = mp.Simulation(cell_size=cell,
-                    geometry=None,
+                    geometry=geometry,
                     boundary_layers=pml_layers,
                     symmetries=None,
                     resolution=resolution)
@@ -42,12 +42,11 @@ def move_source(sim):
         ]
     )
 
-sim.plot3D()
+# sim.plot3D()
 
 sim.use_output_directory()
 
-sim.run(mp.at_beginning(mp.output_epsilon),
-    move_source,
-    mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x,cell.y)), mp.output_efield_x)),
-    until=cell.x / electron_v,
-)
+sim.run(mp.at_beginning(mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x,cell.y)), mp.output_epsilon)),
+        move_source,
+        mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x,cell.y)), mp.output_efield_x)),
+        until=cell.x / electron_v,)

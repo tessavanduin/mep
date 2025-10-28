@@ -5,3 +5,8 @@ __pycache__/
 
 # Ignore output directories
 *-out/
+*.out
+
+#
+pade/
+*ipynb
