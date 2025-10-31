@@ -20,7 +20,8 @@ resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in 
 print(f"RESOLUTION: {resolution} = {426/resolution} nm")
 
 dpml = thickness    # PML thickness
-pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
+# pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
+pml_layers = [mp.PML(thickness=dpml)]
 
 sim = mp.Simulation(cell_size=cell,
                     geometry=geometry,
@@ -33,7 +34,8 @@ sim = mp.Simulation(cell_size=cell,
 electron_v = E_to_speed(1e5)
 
 # model the electron from the edge of the PML to the edge of the other PML
-electron_path_length = cell.x - 2*dpml
+border_offset = dpml
+electron_path_length = cell.x - 2*border_offset
 start_pos = -0.5 * electron_path_length
 def electron_path(t):
     return mp.Vector3( start_pos + electron_v * t, 0, 0)
@@ -70,9 +72,9 @@ sim.use_output_directory()
 
 sim.run(move_source,
     mp.after_time(
-        (a-dpml)/electron_v,
+        (a-border_offset)/electron_v,
         mp.before_time(
-            (electron_path_length-(a-dpml))/electron_v,
+            (electron_path_length-(a-border_offset))/electron_v,
             get_flux,
             mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x-2*a, 0, 0)), mp.output_efield_x))
         )
