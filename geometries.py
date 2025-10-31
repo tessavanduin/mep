@@ -33,8 +33,8 @@ class TriangleUnitCell:
 
 def create_slab_holes(r, a, h, shift, coords, geometry):
     for i in np.append(np.arange(-3,0),np.arange(1,4)):
-            T = i*h+np.sign(i)*shift
-            geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0)).geometry)
+        T = i*h+np.sign(i)*shift
+        geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0)).geometry)
 
 class SlottedTriangleLattice:
     def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, coords: mp.Vector3=mp.Vector3(0,0,0)):
@@ -73,10 +73,10 @@ class SlottedTriangleLattice:
 
 
 class SlottedTriangleLatticeCavity:
-    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45):
+    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=28):
         a_nm = 426
         h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3(28*a, 6*h, 12*thickness)
+        cell = mp.Vector3(width*a, 6*h, 12*thickness)
 
 
         # Create the dielectric slab
@@ -84,7 +84,7 @@ class SlottedTriangleLatticeCavity:
         geometry = [b]
 
         # Create row of SlottedTriangleLattice "unit cells"
-        for T in np.arange(1,29) - 14.5:
+        for T in np.arange(1,width+1) - (width+1)/2:
             create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
         
         # Cover top and bottom holes
