@@ -10,3 +10,7 @@ __pycache__/
 #
 pade/
 *ipynb
+
+# Except
+!DIFF_calc.ipynb
+!FT_and_integral.ipynb
