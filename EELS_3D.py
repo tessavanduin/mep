@@ -4,15 +4,17 @@ import h5py
 from geometries import *
 from helper_functions import E_to_speed
 
+q_e =  1.60217646e-19
+
 # Some parameters to describe the geometry:
 a = 1               # Lattice constant
 h = np.sqrt(3)*a    # Unit cell height
-thickness = 220/426 # Slab thickness 
+thickness = 220/426 # Slab thickness
 r = 0.245           # Radius of holes, r = 0.245*a
 shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
 sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
-simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=30)
+simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=38)
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
 # resolution of 18 nm
@@ -40,6 +42,8 @@ start_pos = -0.5 * electron_path_length
 def electron_path(t):
     return mp.Vector3( start_pos + electron_v * t, 0, 0)
 
+charge_density = resolution**3 * -q_e
+
 def move_source(sim: mp.Simulation):
     sim.change_sources(
         [
@@ -47,6 +51,7 @@ def move_source(sim: mp.Simulation):
                 mp.ContinuousSource(frequency=1e-10),
                 component=mp.Ex,
                 center=electron_path(sim.meep_time()),
+                # amplitude=charge_density*electron_v
             )
         ]
     )
@@ -58,17 +63,18 @@ def get_flux(sim: mp.Simulation):
     b = 0.1 # cube size
     g = 0.5*b
     b_center = electron_path(sim.meep_time()) # same position as electron
-    flux[0,0] = np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3( g, 0, 0), size=mp.Vector3(0,b,b))) # x pos
-    flux[0,1] = np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3(-g, 0, 0), size=mp.Vector3(0,b,b))) # x neg
-    flux[1,0] = np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0, g, 0), size=mp.Vector3(b,0,b))) # y pos
-    flux[1,1] = np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0,-g, 0), size=mp.Vector3(b,0,b))) # y neg
-    flux[2,0] = np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0, g), size=mp.Vector3(b,b,0))) # z pos
-    flux[2,1] = np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0,-g), size=mp.Vector3(b,b,0))) # z neg
+    flux[0,0] =  np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3( g, 0, 0), size=mp.Vector3(0,b,b))) # x pos
+    flux[0,1] = -np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3(-g, 0, 0), size=mp.Vector3(0,b,b))) # x neg
+    flux[1,0] =  np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0, g, 0), size=mp.Vector3(b,0,b))) # y pos
+    flux[1,1] = -np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0,-g, 0), size=mp.Vector3(b,0,b))) # y neg
+    flux[2,0] =  np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0, g), size=mp.Vector3(b,b,0))) # z pos
+    flux[2,1] = -np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0,-g), size=mp.Vector3(b,b,0))) # z neg
     flux_total.append(np.sum(flux)*ds)
 
 # sim.plot3D()
 
 sim.use_output_directory()
+
 
 sim.run(move_source,
     mp.after_time(
