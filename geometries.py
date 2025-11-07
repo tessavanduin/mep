@@ -76,11 +76,11 @@ class SlottedTriangleLatticeCavity:
     def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=28):
         a_nm = 426
         h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3(width*a, 6*h, 12*thickness)
+        cell = mp.Vector3((width+2)*a, 6*h, 12*thickness)
 
 
         # Create the dielectric slab
-        b = mp.Block(center=mp.Vector3(0,0,0), size=mp.Vector3(mp.inf,mp.inf, thickness), material=mp.Medium(index=index))
+        b = mp.Block(center=mp.Vector3(0,0,0), size=mp.Vector3(width*a,mp.inf, thickness), material=mp.Medium(index=index))
         geometry = [b]
 
         # Create row of SlottedTriangleLattice "unit cells"
@@ -89,8 +89,8 @@ class SlottedTriangleLatticeCavity:
         
         # Cover top and bottom holes
         geometry.extend([
-            mp.Block(size=mp.Vector3(mp.inf,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
-            mp.Block(size=mp.Vector3(mp.inf,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
+            mp.Block(size=mp.Vector3(width*a,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
+            mp.Block(size=mp.Vector3(width*a,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
         ])
 
 

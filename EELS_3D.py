@@ -14,7 +14,7 @@ r = 0.245           # Radius of holes, r = 0.245*a
 shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
 sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
-simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=38)
+simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=36)
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
 # resolution of 18 nm
