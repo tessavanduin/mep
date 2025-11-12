@@ -18,7 +18,7 @@ simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, ind
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
 # resolution of 18 nm
-resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
+resolution=np.ceil(426/9) # convert resolution in terms of nm to resolution in terms of a
 print(f"RESOLUTION: {resolution} = {426/resolution} nm")
 
 dpml = thickness    # PML thickness
