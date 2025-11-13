@@ -41,8 +41,7 @@ sim = mp.Simulation(cell_size=cell,
 electron_v = E_to_speed(1e5)
 
 # model the electron from the edge of the PML to the edge of the other PML
-border_offset = dpml
-electron_path_length = cell.x - 2*border_offset
+electron_path_length = cell.x - 2*dpml
 start_pos = -0.5 * electron_path_length
 def electron_path(t):
     return mp.Vector3( start_pos + electron_v * t, 0, 0)
@@ -76,22 +75,26 @@ def get_flux(sim: mp.Simulation):
     flux[2,1] = -np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0,-g), size=mp.Vector3(b,b,0))) # z neg
     flux_total.append(np.sum(flux)*ds)
 
-sim.plot3D()
+# sim.plot3D()
 
-# sim.use_output_directory()
+sim.use_output_directory()
 
-# air_region_x = air_offset.x
-# sim.run(move_source,
-#     mp.after_time(
-#         ((air_region_x)-border_offset)/electron_v,
-#         mp.before_time(
-#             (electron_path_length-((12*thickness)-border_offset))/electron_v,
-#             get_flux,
-#             mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(crystal_x_width, 0, 0)), mp.output_efield_x))
-#         )
-#     ),
-#     until=electron_path_length / electron_v
-# )
+monitor_width = crystal_x_width # monitor_width < electron_path_length
+start_pos_till_monitor = (electron_path_length - monitor_width)/2
+start_time = start_pos_till_monitor/electron_v
+end_time   = (start_pos_till_monitor + monitor_width)/electron_v
 
-# with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
-#     dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
+sim.run(move_source,
+    mp.after_time(
+        start_time,
+        mp.before_time(
+            end_time,
+            get_flux,
+            mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(crystal_x_width, 0, 0)), mp.output_efield_x))
+        )
+    ),
+    until=electron_path_length / electron_v
+)
+
+with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
+    dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
