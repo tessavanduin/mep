@@ -14,8 +14,13 @@ r = 0.245           # Radius of holes, r = 0.245*a
 shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
 sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
-simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=36)
+crystal_x_width = 36
+simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=crystal_x_width)
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
+
+air_offset = mp.Vector3(12*thickness,12*thickness,12*thickness)
+cell = cell + air_offset
+
 
 # resolution of 18 nm
 resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
@@ -71,22 +76,22 @@ def get_flux(sim: mp.Simulation):
     flux[2,1] = -np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0,-g), size=mp.Vector3(b,b,0))) # z neg
     flux_total.append(np.sum(flux)*ds)
 
-# sim.plot3D()
+sim.plot3D()
 
-sim.use_output_directory()
+# sim.use_output_directory()
 
+# air_region_x = air_offset.x
+# sim.run(move_source,
+#     mp.after_time(
+#         ((air_region_x)-border_offset)/electron_v,
+#         mp.before_time(
+#             (electron_path_length-((12*thickness)-border_offset))/electron_v,
+#             get_flux,
+#             mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(crystal_x_width, 0, 0)), mp.output_efield_x))
+#         )
+#     ),
+#     until=electron_path_length / electron_v
+# )
 
-sim.run(move_source,
-    mp.after_time(
-        (a-border_offset)/electron_v,
-        mp.before_time(
-            (electron_path_length-(a-border_offset))/electron_v,
-            get_flux,
-            mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(cell.x-2*a, 0, 0)), mp.output_efield_x))
-        )
-    ),
-    until=electron_path_length / electron_v
-)
-
-with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
-    dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
+# with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
+#     dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)

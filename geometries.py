@@ -74,13 +74,24 @@ class SlottedTriangleLattice:
 
 class SlottedTriangleLatticeCavity:
     def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=28):
+        """Same as SlottedTriangleLattice but width shifted holes in the middle to increase cavity mode Q factor.
+
+        Args:
+            r (float): Hole radius
+            a (float, optional): Primitive lattice vector. Defaults to 1.
+            thickness (float, optional): thickness of the slab. Defaults to 1.
+            shift (float, optional): Amount by which to shift the holes in the two halves of the crystal up and down. Defaults to 0.
+            sw (float, optional): Width of the air slot. Defaults to 0.
+            index (float, optional): Square root of permittivity. Defaults to 3.45.
+            width (int, optional): Number of lattice constants the crystal extends in the x direction. Defaults to 28.
+        """
         a_nm = 426
         h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3((width+2)*a, 6*h, 12*thickness)
+        cell = mp.Vector3((width)*a, 6*h+2*shift, thickness)
 
 
         # Create the dielectric slab
-        b = mp.Block(center=mp.Vector3(0,0,0), size=mp.Vector3(width*a,mp.inf, thickness), material=mp.Medium(index=index))
+        b = mp.Block(center=mp.Vector3(0,0,0), size=cell, material=mp.Medium(index=index))
         geometry = [b]
 
         # Create row of SlottedTriangleLattice "unit cells"
