@@ -62,10 +62,10 @@ def move_source(sim: mp.Simulation):
 
 flux_total = []
 ds = (a/resolution)**2 # surface element in units of a
+b = 0.1 # cube size
+g = 0.5*b
 def get_flux(sim: mp.Simulation):
     flux = np.empty((3,2))
-    b = 0.1 # cube size
-    g = 0.5*b
     b_center = electron_path(sim.meep_time()) # same position as electron
     flux[0,0] =  np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3( g, 0, 0), size=mp.Vector3(0,b,b))) # x pos
     flux[0,1] = -np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3(-g, 0, 0), size=mp.Vector3(0,b,b))) # x neg
@@ -90,7 +90,7 @@ sim.run(move_source,
         mp.before_time(
             end_time,
             get_flux,
-            mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(crystal_x_width, 0, 0)), mp.output_efield_x))
+            mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
         )
     ),
     until=electron_path_length / electron_v
