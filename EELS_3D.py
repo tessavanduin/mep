@@ -4,6 +4,7 @@ import h5py
 from geometries import *
 from helper_functions import E_to_speed
 from helper_functions import create_flux_box
+from helper_functions import integrate_flux_box
 
 q_e =  1.60217646e-19
 
@@ -68,21 +69,16 @@ ds = (a/resolution)**2 # surface element in units of a
 # Find flux through a small box following the electron
 b = mp.Vector3(0.1,0.1,0.1) # cube size
 def get_flux(sim: mp.Simulation):
-    flux = 0
     b_center = electron_path(sim.meep_time()) # same position as electron
-    for surf, comp, sign in zip(create_flux_box(center=b_center, size=b)):
-        field = sim.get_array(comp, vol=surf)
-        flux += sign*np.sum(field)*ds
-    flux_total.append(np.sum(flux)*ds)
+    flux_box = create_flux_box(center=b_center, size=b)
+    flux = integrate_flux_box(sim, flux_box)
+    flux_total.append(flux)
 
 # Find flux through big stationary box close to the edge of the simulation domain
 big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
-surfaces, components, signs = create_flux_box(center=mp.Vector3(), size=big_box)
+flux_box = create_flux_box(center=mp.Vector3(), size=big_box)
 def get_flux_2(sim: mp.Simulation):
-    flux = 0
-    for surf, comp, sign in zip(surfaces, components, signs):
-        field = sim.get_array(comp, vol=surf)
-        flux += sign*np.sum(field)*ds
+    flux = integrate_flux_box(sim, flux_box)
     flux_total.append(flux)
 
 # sim.plot3D()

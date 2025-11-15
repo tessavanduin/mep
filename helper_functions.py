@@ -51,3 +51,20 @@ def create_flux_box(cent: mp.Vector3, b: mp.Vector3):
     components = [mp.Ex, mp.Ex, mp.Ey, mp.Ey, mp.Ez, mp.Ez]
     signs = [1,-1,1,-1,1,-1]
     return surfaces, components, signs
+
+def integrate_flux_box(sim: mp.Simulation, flux_box: tuple, ds: float):
+    """Integrate a field over the surface of a flux box
+
+    Args:
+        sim (mp.Simulation): MEEP simulation in a certain state
+        flux_box (tuple): tuple of surfaces, field components and signs
+        ds (float): surface elements
+
+    Returns:
+        float: total flux through the surface of the volume specified by `flux_box`
+    """
+    flux = 0
+    for surf, comp, sign in zip(*flux_box):
+        field = sim.get_array(comp, vol=surf)
+        flux += sign*np.sum(field)
+    return flux*ds
