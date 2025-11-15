@@ -3,6 +3,7 @@ import numpy as np
 import h5py
 from geometries import *
 from helper_functions import E_to_speed
+from helper_functions import create_flux_box
 
 q_e =  1.60217646e-19
 
@@ -18,7 +19,7 @@ crystal_x_width = 36
 simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=crystal_x_width)
 geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-air_offset = mp.Vector3(12*thickness,12*thickness,12*thickness)
+air_offset = mp.Vector3(a,0,11.5*thickness)
 cell = cell + air_offset
 
 
@@ -60,20 +61,29 @@ def move_source(sim: mp.Simulation):
         ]
     )
 
+
 flux_total = []
 ds = (a/resolution)**2 # surface element in units of a
-b = 0.1 # cube size
-g = 0.5*b
+
+# Find flux through a small box following the electron
+b = mp.Vector3(0.1,0.1,0.1) # cube size
 def get_flux(sim: mp.Simulation):
-    flux = np.empty((3,2))
+    flux = 0
     b_center = electron_path(sim.meep_time()) # same position as electron
-    flux[0,0] =  np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3( g, 0, 0), size=mp.Vector3(0,b,b))) # x pos
-    flux[0,1] = -np.sum(sim.get_array(mp.Ex, center=b_center+mp.Vector3(-g, 0, 0), size=mp.Vector3(0,b,b))) # x neg
-    flux[1,0] =  np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0, g, 0), size=mp.Vector3(b,0,b))) # y pos
-    flux[1,1] = -np.sum(sim.get_array(mp.Ey, center=b_center+mp.Vector3( 0,-g, 0), size=mp.Vector3(b,0,b))) # y neg
-    flux[2,0] =  np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0, g), size=mp.Vector3(b,b,0))) # z pos
-    flux[2,1] = -np.sum(sim.get_array(mp.Ez, center=b_center+mp.Vector3( 0, 0,-g), size=mp.Vector3(b,b,0))) # z neg
+    for surf, comp, sign in zip(create_flux_box(center=b_center, size=b)):
+        field = sim.get_array(comp, vol=surf)
+        flux += sign*np.sum(field)*ds
     flux_total.append(np.sum(flux)*ds)
+
+# Find flux through big stationary box close to the edge of the simulation domain
+big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
+surfaces, components, signs = create_flux_box(center=mp.Vector3(), size=big_box)
+def get_flux_2(sim: mp.Simulation):
+    flux = 0
+    for surf, comp, sign in zip(surfaces, components, signs):
+        field = sim.get_array(comp, vol=surf)
+        flux += sign*np.sum(field)*ds
+    flux_total.append(flux)
 
 # sim.plot3D()
 
@@ -89,7 +99,7 @@ sim.run(move_source,
         start_time,
         mp.before_time(
             end_time,
-            get_flux,
+            get_flux_2,
             mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
         )
     ),
