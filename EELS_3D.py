@@ -70,13 +70,13 @@ ds = (a/resolution)**2 # surface element in units of a
 b = mp.Vector3(0.1,0.1,0.1) # cube size
 def get_flux(sim: mp.Simulation):
     b_center = electron_path(sim.meep_time()) # same position as electron
-    flux_box = create_flux_box(center=b_center, size=b)
+    flux_box = create_flux_box(b_center, b)
     flux = integrate_flux_box(sim, flux_box)
     flux_total.append(flux)
 
 # Find flux through big stationary box close to the edge of the simulation domain
 big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
-flux_box = create_flux_box(center=mp.Vector3(), size=big_box)
+flux_box = create_flux_box(mp.Vector3(), big_box)
 def get_flux_2(sim: mp.Simulation):
     flux = integrate_flux_box(sim, flux_box)
     flux_total.append(flux)
@@ -102,5 +102,5 @@ sim.run(move_source,
     until=electron_path_length / electron_v
 )
 
-with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
+with h5py.File("EELS_3D-out/EELS_3D_div-ex.h5", "r+") as f:
     dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
