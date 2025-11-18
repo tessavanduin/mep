@@ -129,7 +129,7 @@ if __name__ == "__main__":
     "This is the same as setting a=1 and specifying all parameters as ratios.")
     parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
     parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
-    parser.add_argument("-r", type=int, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
+    parser.add_argument("-r", type=float, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
     parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
     args = parser.parse_args()
     main(args)
