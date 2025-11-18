@@ -7,7 +7,7 @@ class SimulationDomain:
         self.cell = mp.Vector3()
 
 class TriangleUnitCell:
-    def __init__(self, r: float, a=1, coords: mp.Vector3=mp.Vector3(0,0,0), mask: list=[True,True,True,True]):
+    def __init__(self, r: float, a=1, coords: mp.Vector3=mp.Vector3(0,0,0), mask: list=4*[True]):
         """Create all objects associated with 1 unit cell of the following crystal lattice:
           1
          . .
@@ -23,27 +23,29 @@ class TriangleUnitCell:
         """
         # Note that the unit cell's width is equal to a
         h = np.sqrt(3)*a    # height of the unit cell
-        c1 = mp.Cylinder(center=mp.Vector3(0,-0.5*h,0) + coords, radius=r)
-        c2 = mp.Cylinder(center=mp.Vector3(0.5*a,0,0) + coords, radius=r)
-        c3 = mp.Cylinder(center=mp.Vector3(-0.5*a,0,0) + coords, radius=r)
-        c4 = mp.Cylinder(center=mp.Vector3(0,0.5*h,0) + coords, radius=r)
+        c1 = mp.Cylinder(center=mp.Vector3(0,0.5*h,0) + coords, radius=r)
+        c2 = mp.Cylinder(center=mp.Vector3(-0.5*a,0,0) + coords, radius=r)
+        c3 = mp.Cylinder(center=mp.Vector3(0.5*a,0,0) + coords, radius=r)
+        c4 = mp.Cylinder(center=mp.Vector3(0,-0.5*h,0) + coords, radius=r)
 
-        self.geometry = list(np.array([c1, c2, c3, c4])[np.array(mask)])
+        self.geometry = list(np.array([c1, c2, c3, c4])[np.array(mask, dtype=bool)])
         self.cell = mp.Vector3(a, h, 0)
 
 
-def create_slab_holes(r, a, h, shift, coords, geometry):
+def create_slab_holes(r, a, h, shift, coords):
+    geometry = []
     for i in np.append(np.arange(-3,0),np.arange(1,4)):
         T = i*h+np.sign(i)*shift
-        mask = [True,True,True,True]
+        mask = [True]*4
         if i == -3:
             mask = [False,False,False,True]
         elif i == 3:
             mask = [True,False,False,False]
         geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0), mask).geometry)
+    return geometry
 
 class SlottedTriangleLattice:
-    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=1):
+    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=1, mask=None):
         """Create a triangle lattice in a slab with air slot in the middle parallel to the x-direction.
         The two halves of the crystal can be shifted up and down to make the waveguide wider.
 
@@ -63,8 +65,16 @@ class SlottedTriangleLattice:
         geometry = [b]
 
         ## Create row of SlottedTriangleLattice "unit cells"
+        # for T in np.arange(1,width+1) - (width+1)/2:
+        #     create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
+
+        slotted_triangle_strips = []
         for T in np.arange(1,width+1) - (width+1)/2:
-            create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
+            slotted_triangle_strips.append(create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0)))
+
+        if not mask: mask = width*[True]
+        for i, strip in enumerate(list(np.array(slotted_triangle_strips)[np.array(mask)])):
+            geometry.extend(strip)
 
         # Create the air slot
         geometry.append( mp.Block(size=mp.Vector3(mp.inf,sw,mp.inf)) )
@@ -86,27 +96,36 @@ class SlottedTriangleLatticeCavity(SlottedTriangleLattice):
             index (float, optional): Square root of permittivity. Defaults to 3.45.
             width (int, optional): Number of lattice constants the crystal extends in the x direction. Defaults to 28.
         """
-        super().__init__(r, a, thickness, shift, sw, index, width)
+        mask = [True]*15 + [False]*6 + [True]*15
+        super().__init__(r, a, thickness, shift, sw, index, width, mask=mask)
 
         a_nm = 426
         h = np.sqrt(3)*a    # Height of a unit cell
-
-        # Cover cavity holes, and create new shifted holes
-        covers = [
-            mp.Block(center=mp.Vector3(0,0.6*h), size=mp.Vector3(5*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
-            mp.Block(center=mp.Vector3(0,1.1*h), size=mp.Vector3(4*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
-            mp.Block(center=mp.Vector3(0,1.6*h), size=mp.Vector3(3*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
-            mp.Block(center=mp.Vector3(0,-0.6*h), size=mp.Vector3(5*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
-            mp.Block(center=mp.Vector3(0,-1.1*h), size=mp.Vector3(4*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
-            mp.Block(center=mp.Vector3(0,-1.6*h), size=mp.Vector3(3*a+2*r,2*r,thickness), material=mp.Medium(index=index))
-        ]
-        self.geometry.extend(covers)
 
         # Create shifted holes
         shift1 = 5/a_nm
         shift2 = 10/a_nm
         shift3 = 15/a_nm
         
+        unshifted = []
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 0.5, 2*h+shift), [1,1,1,0]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 1.5, 2*h+shift), [1,1,1,0]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 2.5, 2*h+shift), [1,0,0,1]).geometry)
+
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-0.5, 2*h+shift), [1,1,1,0]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-1.5, 2*h+shift), [1,1,1,0]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-2.5, 2*h+shift), [1,0,0,1]).geometry)
+
+
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 0.5,-2*h-shift), [0,1,1,1]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 1.5,-2*h-shift), [0,1,1,1]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3( 2.5,-2*h-shift), [1,0,0,1]).geometry)
+
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-0.5,-2*h-shift), [0,1,1,1]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-1.5,-2*h-shift), [0,1,1,1]).geometry)
+        unshifted.extend(TriangleUnitCell(r, a, mp.Vector3(-2.5,-2*h-shift), [1,0,0,1]).geometry)
+        self.geometry.extend(unshifted)
+
         shift1_holes = [
             mp.Cylinder(center=mp.Vector3(0.5*a,1.6*h+shift1), radius=r),
             mp.Cylinder(center=mp.Vector3(1.5*a,1.6*h+shift1), radius=r),
