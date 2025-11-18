@@ -11,25 +11,26 @@ from divergence import divE_at_point
 q_e =  1.60217646e-19
 
 def main(args):
+    a_nm = args.a
     # Some parameters to describe the geometry:
-    a = 1               # Lattice constant
-    h = np.sqrt(3)*a    # Unit cell height
-    thickness = 220/426 # Slab thickness
-    r = 0.245           # Radius of holes, r = 0.245*a
-    shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
-    sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
+    a = 1                   # Lattice constant
+    h = np.sqrt(3)*a        # Unit cell height
+    thickness = 220/a_nm    # Slab thickness
+    r = args.r              # Radius of holes, r = 0.245*a
+    shift = (args.W-1)/2*h  # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
+    sw = 100/a_nm           # Slot width, sw = 100nm = 100/426 * a.
 
     crystal_x_width = 36
-    simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=crystal_x_width)
+    simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
     geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-    air_offset = mp.Vector3(a,0,11.5*thickness)
+    air_offset = mp.Vector3(1,1,1)*12*thickness
     cell = cell + air_offset
 
 
     # resolution of 18 nm
-    resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
-    print(f"RESOLUTION: {resolution} = {426/resolution} nm")
+    resolution=np.ceil(a_nm/18) # convert resolution in terms of nm to resolution in terms of a
+    print(f"RESOLUTION: {resolution} = {a_nm/resolution} nm")
 
     dpml = thickness    # PML thickness
     # pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
@@ -47,6 +48,8 @@ def main(args):
         elif sim.dimensions == 2:
             sim.plot2D()
         return
+    filename = f"_{'EMPTY' if args.e else 'CRYSTAL'}_PML_a{crystal_x_width}-r" + str(int(r*1000)) + "-ex_air_flx3"
+    sim.use_output_directory()
 
 
     # 100keV electron velocity
@@ -96,8 +99,6 @@ def main(args):
         flux_total.append(flux)
 
 
-    sim.use_output_directory()
-
     monitor_width = crystal_x_width # monitor_width < electron_path_length
     start_pos_till_monitor = (electron_path_length - monitor_width)/2
     start_time = start_pos_till_monitor/electron_v
@@ -109,23 +110,26 @@ def main(args):
             mp.before_time(
                 end_time,
                 get_flux_2,
-                mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
+                mp.to_appended(filename, mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
             )
         ),
         until=electron_path_length / electron_v
     )
 
-    with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
+    with h5py.File(f"EELS_3D-out/EELS_3D{filename}.h5", "r+") as f:
         dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--plot", action='store_true', help="Plot the defined geometry.")
+    parser.add_argument("-e", "--empty", action='store_true', help="Run the simulation in an empty simulation " \
+    "domain with size as if the specified geometry would be there.")
     parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \
     "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
     "This is the same as setting a=1 and specifying all parameters as ratios.")
     parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
     parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
     parser.add_argument("-r", type=int, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
+    parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
     args = parser.parse_args()
     main(args)

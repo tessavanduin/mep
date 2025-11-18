@@ -53,7 +53,7 @@ class SlottedTriangleLattice:
         cell = mp.Vector3((width)*a, 6*h+2*shift, thickness)
 
         # Create the dielectric slab
-        b = mp.Block(center=mp.Vector3(0,0,0), size=mp.Vector3(mp.inf,mp.inf, thickness), material=mp.Medium(index=index))
+        b = mp.Block(center=mp.Vector3(0,0,0), size=cell, material=mp.Medium(index=index))
         geometry = [b]
 
         ## Create row of SlottedTriangleLattice "unit cells"
@@ -62,8 +62,8 @@ class SlottedTriangleLattice:
 
         # Cover top and bottom holes
         geometry.extend([
-            mp.Block(size=mp.Vector3(mp.inf,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
-            mp.Block(size=mp.Vector3(mp.inf,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
+            mp.Block(size=mp.Vector3(cell.x,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
+            mp.Block(size=mp.Vector3(cell.x,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
         ])
 
         # Create the air slot
