@@ -1,3 +1,4 @@
+import argparse
 import meep as mp
 import numpy as np
 import h5py
@@ -5,102 +6,126 @@ from geometries import *
 from helper_functions import E_to_speed
 from helper_functions import create_flux_box
 from helper_functions import integrate_flux_box
+from divergence import divE_at_point
 
 q_e =  1.60217646e-19
 
-# Some parameters to describe the geometry:
-a = 1               # Lattice constant
-h = np.sqrt(3)*a    # Unit cell height
-thickness = 220/426 # Slab thickness
-r = 0.245           # Radius of holes, r = 0.245*a
-shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
-sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
+def main(args):
+    # Some parameters to describe the geometry:
+    a = 1               # Lattice constant
+    h = np.sqrt(3)*a    # Unit cell height
+    thickness = 220/426 # Slab thickness
+    r = 0.245           # Radius of holes, r = 0.245*a
+    shift = 0.1*h       # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
+    sw = 100/426        # Slot width, sw = 100nm = 100/426 * a.
 
-crystal_x_width = 36
-simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=crystal_x_width)
-geometry, cell = simulation_domain.geometry, simulation_domain.cell
+    crystal_x_width = 36
+    simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=3.45, width=crystal_x_width)
+    geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-air_offset = mp.Vector3(a,0,11.5*thickness)
-cell = cell + air_offset
-
-
-# resolution of 18 nm
-resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
-print(f"RESOLUTION: {resolution} = {426/resolution} nm")
-
-dpml = thickness    # PML thickness
-# pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
-pml_layers = [mp.PML(thickness=dpml)]
-
-sim = mp.Simulation(cell_size=cell,
-                    geometry=geometry,
-                    boundary_layers=pml_layers,
-                    symmetries=None,
-                    resolution=resolution)
+    air_offset = mp.Vector3(a,0,11.5*thickness)
+    cell = cell + air_offset
 
 
-# 100keV electron velocity
-electron_v = E_to_speed(1e5)
+    # resolution of 18 nm
+    resolution=np.ceil(426/18) # convert resolution in terms of nm to resolution in terms of a
+    print(f"RESOLUTION: {resolution} = {426/resolution} nm")
 
-# model the electron from the edge of the PML to the edge of the other PML
-electron_path_length = cell.x - 2*dpml
-start_pos = -0.5 * electron_path_length
-def electron_path(t):
-    return mp.Vector3( start_pos + electron_v * t, 0, 0)
+    dpml = thickness    # PML thickness
+    # pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
+    pml_layers = [mp.PML(thickness=dpml)]
 
-charge_density = resolution**3 * -q_e
+    sim = mp.Simulation(cell_size=cell,
+                        geometry=geometry,
+                        boundary_layers=pml_layers,
+                        symmetries=None,
+                        resolution=resolution)
 
-def move_source(sim: mp.Simulation):
-    sim.change_sources(
-        [
-            mp.Source(
-                mp.ContinuousSource(frequency=1e-20),
-                component=mp.Ex,
-                center=electron_path(sim.meep_time()),
-                # amplitude=charge_density*electron_v
+    if args.plot:
+        if sim.dimensions == 3:
+            sim.plot3D()
+        elif sim.dimensions == 2:
+            sim.plot2D()
+        return
+
+
+    # 100keV electron velocity
+    electron_v = E_to_speed(1e5)
+
+    # model the electron from the edge of the PML to the edge of the other PML
+    electron_path_length = cell.x - 2*dpml
+    start_pos = -0.5 * electron_path_length
+    def electron_path(t):
+        return mp.Vector3( start_pos + electron_v * t, 0, 0)
+
+    charge_density = resolution**3 * -q_e
+
+    def move_source(sim: mp.Simulation):
+        sim.change_sources(
+            [
+                mp.Source(
+                    mp.ContinuousSource(frequency=1e-20),
+                    component=mp.Ex,
+                    center=electron_path(sim.meep_time()),
+                    # amplitude=charge_density*electron_v
+                )
+            ]
+        )
+
+
+    flux_total = []
+    ds = (a/resolution)**2 # surface element in units of a
+
+    # Find flux through a small box following the electron
+    b = mp.Vector3(0.1,0.1,0.1) # cube size
+    def get_flux(sim: mp.Simulation):
+        b_center = electron_path(sim.meep_time()) # same position as electron
+        flux_box = create_flux_box(b_center, b)
+        flux = integrate_flux_box(sim, flux_box, ds)
+        flux_total.append(flux)
+
+    # Find flux through big stationary box close to the edge of the simulation domain
+    big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
+    flux_box = create_flux_box(mp.Vector3(), big_box)
+    def get_flux_2(sim: mp.Simulation):
+        flux = integrate_flux_box(sim, flux_box, ds)
+        flux_total.append(flux)
+
+    def get_divergence(sim: mp.Simulation):
+        flux = divE_at_point(sim, electron_path(sim.meep_time()))
+        flux_total.append(flux)
+
+
+    sim.use_output_directory()
+
+    monitor_width = crystal_x_width # monitor_width < electron_path_length
+    start_pos_till_monitor = (electron_path_length - monitor_width)/2
+    start_time = start_pos_till_monitor/electron_v
+    end_time   = (start_pos_till_monitor + monitor_width)/electron_v
+
+    sim.run(move_source,
+        mp.after_time(
+            start_time,
+            mp.before_time(
+                end_time,
+                get_flux_2,
+                mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
             )
-        ]
+        ),
+        until=electron_path_length / electron_v
     )
 
+    with h5py.File("EELS_3D-out/EELS_3D-ex.h5", "r+") as f:
+        dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
 
-flux_total = []
-ds = (a/resolution)**2 # surface element in units of a
-
-# Find flux through a small box following the electron
-b = mp.Vector3(0.1,0.1,0.1) # cube size
-def get_flux(sim: mp.Simulation):
-    b_center = electron_path(sim.meep_time()) # same position as electron
-    flux_box = create_flux_box(b_center, b)
-    flux = integrate_flux_box(sim, flux_box)
-    flux_total.append(flux)
-
-# Find flux through big stationary box close to the edge of the simulation domain
-big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
-flux_box = create_flux_box(mp.Vector3(), big_box)
-def get_flux_2(sim: mp.Simulation):
-    flux = integrate_flux_box(sim, flux_box)
-    flux_total.append(flux)
-
-# sim.plot3D()
-
-sim.use_output_directory()
-
-monitor_width = crystal_x_width # monitor_width < electron_path_length
-start_pos_till_monitor = (electron_path_length - monitor_width)/2
-start_time = start_pos_till_monitor/electron_v
-end_time   = (start_pos_till_monitor + monitor_width)/electron_v
-
-sim.run(move_source,
-    mp.after_time(
-        start_time,
-        mp.before_time(
-            end_time,
-            get_flux_2,
-            mp.to_appended("ex", mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
-        )
-    ),
-    until=electron_path_length / electron_v
-)
-
-with h5py.File("EELS_3D-out/EELS_3D_div-ex.h5", "r+") as f:
-    dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--plot", action='store_true', help="Plot the defined geometry.")
+    parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \
+    "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
+    "This is the same as setting a=1 and specifying all parameters as ratios.")
+    parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
+    parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
+    parser.add_argument("-r", type=int, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
+    args = parser.parse_args()
+    main(args)

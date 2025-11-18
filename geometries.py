@@ -37,7 +37,7 @@ def create_slab_holes(r, a, h, shift, coords, geometry):
         geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0)).geometry)
 
 class SlottedTriangleLattice:
-    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, coords: mp.Vector3=mp.Vector3(0,0,0)):
+    def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=1):
         """Create a triangle lattice in a slab with air slot in the middle parallel to the x-direction.
         The two halves of the crystal can be shifted up and down to make the waveguide wider.
 
@@ -50,14 +50,15 @@ class SlottedTriangleLattice:
             index (float, optional): Square root of permittivity. Defaults to 3.45 (Silicon).
         """
         h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3(a, 6*h + 2*shift, 12*thickness)
+        cell = mp.Vector3((width)*a, 6*h+2*shift, thickness)
 
         # Create the dielectric slab
         b = mp.Block(center=mp.Vector3(0,0,0), size=mp.Vector3(mp.inf,mp.inf, thickness), material=mp.Medium(index=index))
         geometry = [b]
 
-        # Create holes in the slab
-        create_slab_holes(r, a, h, shift, coords, geometry)
+        ## Create row of SlottedTriangleLattice "unit cells"
+        for T in np.arange(1,width+1) - (width+1)/2:
+            create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
 
         # Cover top and bottom holes
         geometry.extend([
@@ -72,7 +73,7 @@ class SlottedTriangleLattice:
         self.cell = cell
 
 
-class SlottedTriangleLatticeCavity:
+class SlottedTriangleLatticeCavity(SlottedTriangleLattice):
     def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=28):
         """Same as SlottedTriangleLattice but width shifted holes in the middle to increase cavity mode Q factor.
 
@@ -85,25 +86,10 @@ class SlottedTriangleLatticeCavity:
             index (float, optional): Square root of permittivity. Defaults to 3.45.
             width (int, optional): Number of lattice constants the crystal extends in the x direction. Defaults to 28.
         """
+        super().__init__(r, a, thickness, shift, sw, index, width)
+
         a_nm = 426
         h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3((width)*a, 6*h+2*shift, thickness)
-
-
-        # Create the dielectric slab
-        b = mp.Block(center=mp.Vector3(0,0,0), size=cell, material=mp.Medium(index=index))
-        geometry = [b]
-
-        # Create row of SlottedTriangleLattice "unit cells"
-        for T in np.arange(1,width+1) - (width+1)/2:
-            create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
-        
-        # Cover top and bottom holes
-        geometry.extend([
-            mp.Block(size=mp.Vector3(width*a,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
-            mp.Block(size=mp.Vector3(width*a,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
-        ])
-
 
         # Cover cavity holes, and create new shifted holes
         covers = [
@@ -114,7 +100,7 @@ class SlottedTriangleLatticeCavity:
             mp.Block(center=mp.Vector3(0,-1.1*h), size=mp.Vector3(4*a+2*r,2*r,thickness), material=mp.Medium(index=index)),
             mp.Block(center=mp.Vector3(0,-1.6*h), size=mp.Vector3(3*a+2*r,2*r,thickness), material=mp.Medium(index=index))
         ]
-        geometry.extend(covers)
+        self.geometry.extend(covers)
 
         # Create shifted holes
         shift1 = 5/a_nm
@@ -167,13 +153,6 @@ class SlottedTriangleLatticeCavity:
             mp.Cylinder(center=mp.Vector3(-0.5*a,-(0.6*h+shift3)), radius=r),
         ]
 
-        geometry.extend(shift1_holes)
-        geometry.extend(shift2_holes)
-        geometry.extend(shift3_holes)
-
-        # Create the air slot
-        geometry.append( mp.Block(size=mp.Vector3(mp.inf,sw,mp.inf)) )
-
-
-        self.geometry = geometry
-        self.cell = cell
+        self.geometry.extend(shift1_holes)
+        self.geometry.extend(shift2_holes)
+        self.geometry.extend(shift3_holes)
