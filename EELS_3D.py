@@ -24,7 +24,7 @@ def main(args):
     simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
     geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-    air_offset = mp.Vector3(1,1,1)*12*thickness
+    air_offset = mp.Vector3(1,1,1)#*12*thickness
     cell = cell + air_offset
 
 
@@ -121,7 +121,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--plot", action='store_true', help="Plot the defined geometry.")
+    parser.add_argument("-p", "--plot", action='store_false', help="Plot the defined geometry.")
     parser.add_argument("-e", "--empty", action='store_true', help="Run the simulation in an empty simulation " \
     "domain with size as if the specified geometry would be there.")
     parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \

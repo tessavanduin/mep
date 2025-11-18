@@ -7,7 +7,7 @@ class SimulationDomain:
         self.cell = mp.Vector3()
 
 class TriangleUnitCell:
-    def __init__(self, r: float, a=1, coords: mp.Vector3=mp.Vector3(0,0,0)):
+    def __init__(self, r: float, a=1, coords: mp.Vector3=mp.Vector3(0,0,0), mask: list=[True,True,True,True]):
         """Create all objects associated with 1 unit cell of the following crystal lattice:
           1
          . .
@@ -18,7 +18,8 @@ class TriangleUnitCell:
         Args:
             r (float): Hole radius
             a (int, optional): Primitive lattice vector. Defaults to 1.
-            T (mp.Vector3, optional): Translation of the unit cell. Defaults to mp.Vector3().
+            coords (mp.Vector3, optional): Translation of the unit cell. Defaults to mp.Vector3().
+            mask (list): Option to not place one or multiple of the cylinders. Defaults to placing all.
         """
         # Note that the unit cell's width is equal to a
         h = np.sqrt(3)*a    # height of the unit cell
@@ -27,14 +28,19 @@ class TriangleUnitCell:
         c3 = mp.Cylinder(center=mp.Vector3(-0.5*a,0,0) + coords, radius=r)
         c4 = mp.Cylinder(center=mp.Vector3(0,0.5*h,0) + coords, radius=r)
 
-        self.geometry = [c1, c2, c3, c4]
+        self.geometry = list(np.array([c1, c2, c3, c4])[np.array(mask)])
         self.cell = mp.Vector3(a, h, 0)
 
 
 def create_slab_holes(r, a, h, shift, coords, geometry):
     for i in np.append(np.arange(-3,0),np.arange(1,4)):
         T = i*h+np.sign(i)*shift
-        geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0)).geometry)
+        mask = [True,True,True,True]
+        if i == -3:
+            mask = [False,False,False,True]
+        elif i == 3:
+            mask = [True,False,False,False]
+        geometry.extend(TriangleUnitCell(r, a, coords + mp.Vector3(0,T,0), mask).geometry)
 
 class SlottedTriangleLattice:
     def __init__(self,  r: float, a: float=1, thickness: float=1, shift: float=0, sw: float=0, index: float=3.45, width: int=1):
@@ -59,12 +65,6 @@ class SlottedTriangleLattice:
         ## Create row of SlottedTriangleLattice "unit cells"
         for T in np.arange(1,width+1) - (width+1)/2:
             create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
-
-        # Cover top and bottom holes
-        geometry.extend([
-            mp.Block(size=mp.Vector3(cell.x,2*r,thickness), center=mp.Vector3(0,-0.5*cell.y,0), material=mp.Medium(index=index)),
-            mp.Block(size=mp.Vector3(cell.x,2*r,thickness), center=mp.Vector3(0,0.5*cell.y,0), material=mp.Medium(index=index))
-        ])
 
         # Create the air slot
         geometry.append( mp.Block(size=mp.Vector3(mp.inf,sw,mp.inf)) )
