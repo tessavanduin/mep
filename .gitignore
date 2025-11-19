@@ -15,3 +15,4 @@ pade/
 # Except
 !DIFF_calc.ipynb
 !FT_and_integral.ipynb
+!eels.ipynb
