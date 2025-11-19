@@ -96,7 +96,8 @@ class SlottedTriangleLatticeCavity(SlottedTriangleLattice):
             index (float, optional): Square root of permittivity. Defaults to 3.45.
             width (int, optional): Number of lattice constants the crystal extends in the x direction. Defaults to 28.
         """
-        mask = [True]*15 + [False]*6 + [True]*15
+        half_way = int((width-6)/2)
+        mask = [True]*half_way + [False]*6 + [True]*half_way
         super().__init__(r, a, thickness, shift, sw, index, width, mask=mask)
 
         a_nm = 426

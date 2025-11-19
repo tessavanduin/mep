@@ -11,7 +11,7 @@ from divergence import divE_at_point
 q_e =  1.60217646e-19
 
 def main(args):
-    a_nm = args.a
+    a_nm = args.a # Default: 426
     # Some parameters to describe the geometry:
     a = 1                   # Lattice constant
     h = np.sqrt(3)*a        # Unit cell height
@@ -20,7 +20,7 @@ def main(args):
     shift = (args.W-1)/2*h  # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
     sw = 100/a_nm           # Slot width, sw = 100nm = 100/426 * a.
 
-    crystal_x_width = 36
+    crystal_x_width = args.x # Default: 36
     simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
     geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
@@ -128,6 +128,7 @@ if __name__ == "__main__":
     "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
     "This is the same as setting a=1 and specifying all parameters as ratios.")
     parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
+    parser.add_argument("-x", type=int, default=36, help="X length of the crystal.")
     parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
     parser.add_argument("-r", type=float, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
     parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
