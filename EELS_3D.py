@@ -24,7 +24,7 @@ def main(args):
     simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
     geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-    air_offset = mp.Vector3(1,1,1)#*12*thickness
+    air_offset = mp.Vector3(1,1,1)*12*thickness
     cell = cell + air_offset
 
 
@@ -35,7 +35,7 @@ def main(args):
     dpml = thickness    # PML thickness
     # pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
     pml_layers = [mp.PML(thickness=dpml)]
-
+    if args.empty: geometry=None
     sim = mp.Simulation(cell_size=cell,
                         geometry=geometry,
                         boundary_layers=pml_layers,
@@ -48,7 +48,7 @@ def main(args):
         elif sim.dimensions == 2:
             sim.plot2D()
         return
-    filename = f"_{'EMPTY' if args.e else 'CRYSTAL'}_PML_a{crystal_x_width}-r" + str(int(r*1000)) + "-ex_air_flx3"
+    filename = f"{'EMPTY' if args.empty else 'CRYSTAL'}_PML_a{crystal_x_width}-r" + str(int(r*1000)) + "-ex_air_flx3"
     sim.use_output_directory()
 
 
@@ -116,7 +116,7 @@ def main(args):
         until=electron_path_length / electron_v
     )
 
-    with h5py.File(f"EELS_3D-out/EELS_3D{filename}.h5", "r+") as f:
+    with h5py.File(f"EELS_3D-out/EELS_3D-{filename}.h5", "r+") as f:
         dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
 
 if __name__ == "__main__":
