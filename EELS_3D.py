@@ -21,7 +21,12 @@ def main(args):
     sw = 100/a_nm           # Slot width, sw = 100nm = 100/426 * a.
 
     crystal_x_width = args.x # Default: 36
-    simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
+    if args.cavity:
+        print("Using geometry: SlottedTriangleLatticeCavity")
+        simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
+    else:
+        print("Using geometry: SlottedTriangleLattice")
+        simulation_domain = SlottedTriangleLattice(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
     geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
     air_offset = mp.Vector3(1,1,1)*12*thickness
@@ -124,6 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--plot", action='store_false', help="Plot the defined geometry.")
     parser.add_argument("-e", "--empty", action='store_true', help="Run the simulation in an empty simulation " \
     "domain with size as if the specified geometry would be there.")
+    parser.add_argument("-c", "--cavity", action='store_true', help="Add shifted holes in the middle.")
     parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \
     "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
     "This is the same as setting a=1 and specifying all parameters as ratios.")
