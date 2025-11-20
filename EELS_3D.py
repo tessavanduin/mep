@@ -31,7 +31,7 @@ def main(args):
 
     air_offset = mp.Vector3(1,1,1)*12*thickness
     cell = cell + air_offset
-
+    if args.test and not args.plot: cell = mp.Vector3(2,2,2)
 
     # resolution of 18 nm
     resolution=np.ceil(a_nm/18) # convert resolution in terms of nm to resolution in terms of a
@@ -54,6 +54,7 @@ def main(args):
             sim.plot2D()
         return
     filename = f"{'EMPTY' if args.empty else 'CRYSTAL'}_PML_a{crystal_x_width}-r" + str(int(r*1000)) + "-ex_air_flx3"
+    filename += f"_{'c1' if args.cavity else 'c0'}"
     sim.use_output_directory()
 
 
@@ -126,10 +127,12 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--plot", action='store_false', help="Plot the defined geometry.")
+    parser.add_argument("-p", "--plot", action='store_true', help="Plot the defined geometry.")
     parser.add_argument("-e", "--empty", action='store_true', help="Run the simulation in an empty simulation " \
     "domain with size as if the specified geometry would be there.")
     parser.add_argument("-c", "--cavity", action='store_true', help="Add shifted holes in the middle.")
+    parser.add_argument("-t", "--test", action='store_true', help="Use small cell to test I/O." \
+    "Ignored if -p is specified")
     parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \
     "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
     "This is the same as setting a=1 and specifying all parameters as ratios.")
