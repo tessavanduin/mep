@@ -15,10 +15,10 @@ def main(args):
     # Some parameters to describe the geometry:
     a = 1                   # Lattice constant
     h = np.sqrt(3)*a        # Unit cell height
-    thickness = 220/a_nm    # Slab thickness
+    thickness = args.d/a_nm # Slab thickness
     r = args.r              # Radius of holes, r = 0.245*a
     shift = (args.W-1)/2*h  # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
-    sw = 100/a_nm           # Slot width, sw = 100nm = 100/426 * a.
+    sw = args.s/a_nm        # Slot width, sw = 100nm = 100/426 * a.
 
     crystal_x_width = args.x # Default: 36
     if args.cavity:
@@ -133,12 +133,13 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--cavity", action='store_true', help="Add shifted holes in the middle.")
     parser.add_argument("-t", "--test", action='store_true', help="Use small cell to test I/O." \
     "Ignored if -p is specified")
-    parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a." \
-    "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation." \
+    parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a. " \
+    "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation. " \
     "This is the same as setting a=1 and specifying all parameters as ratios.")
     parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
     parser.add_argument("-x", type=int, default=36, help="X length of the crystal.")
     parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
+    parser.add_argument("-s", type=int, default=100, help="Slot width of the slot in the center of the waveguide.")
     parser.add_argument("-r", type=float, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
     parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
     args = parser.parse_args()
