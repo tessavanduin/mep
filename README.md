@@ -1,0 +1,28 @@
+# Photonic Crystal Simulations
+This repository is dedicated to simulating certain photonic crystal (PhC) properties such as their band diagrams and electron energy loss spectra (EELS) using the [MEEP](https://meep.readthedocs.io/) python package for Finite Difference Time Domain Methods (FDTD). It is part of my applied physics bachelor thesis at TU Delft.
+
+## Instalation
+1) First, I recommend installing `pymeep` using the conda package manager as explained in the MEEP documentation [here](https://meep.readthedocs.io/en/master/Installation/#conda-packages). There is a sequential (mp) and parallel (pmp) version. Both should work in principle but the code might take longer when running on multiple cores due to communication overhead so I recommend running it sequentially for the default geometries.
+
+2) Second, clone this repository. In principle, the files that run the simulation should now work. EELS_3D.py includes a CLI option `-p` to plot your PhC geometry. For this, additional packages may need to be installed. Always **install aditional packages using**:
+```
+conda install -c conda-forge <some-package>
+```
+
+3. Third, for the EELS simulation data processing, a pade Fourier Transform is used. The code for this is available [here](https://github.com/jjgoings/pade). This repository needs to be cloned into PhC-EELS so that its contents can be used by `eels.ipynb`. The folder structure will look like:
+```bash
+PhC-EELS/
+├── pade/
+│   ├── pade.py
+│   ⋮
+├── eels.ipynb
+⋮
+```
+
+## Usage
+The files that perform simulations will output HDF5 files containing electromagnetic time series data. Subsequently, this data can be analyzed using the accompanying notebooks.
+### Band diagrams
+
+### EELS
+EELS data can be generated using `EELS_3D.py`. It can be run using various CLI options that can be viewed by running the file with `-h`. The time series data is stored in the folder `EELS_3D-out/`. To compute the EELS, an additional simulation needs to be run that uses the same parameters but in an empty simulaiton domain, (this data is subtracted from the simulations with dielectric to find the induced electric field). Doing this is easy, one can specify the same simulation but run it with the option `-e` for `--empty`, this will create an empty simulation domain of the same size as if the specified crystal geometry would be there. Once the simulation has finished, the eels spectrum can be plotted by running the cells in `eels.ipynb`. You may have to change the name of the files that are loaded, but it will generally attempt to load 1 file for an empty simulation domain for subtraction and all files that have CRYSTAL in their name.
+
