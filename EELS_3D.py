@@ -36,6 +36,8 @@ def main(args):
     # resolution of 18 nm
     resolution=np.ceil(a_nm/18) # convert resolution in terms of nm to resolution in terms of a
     print(f"RESOLUTION: {resolution} = {a_nm/resolution} nm")
+    print("Accelarating voltage:", args.v, "kV")
+    print()
 
     dpml = thickness    # PML thickness
     # pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
@@ -59,7 +61,7 @@ def main(args):
 
 
     # 100keV electron velocity
-    electron_v = E_to_speed(1e5)
+    electron_v = E_to_speed(args.v*1e3)
 
     # model the electron from the edge of the PML to the edge of the other PML
     electron_path_length = cell.x - 2*dpml
@@ -142,5 +144,6 @@ if __name__ == "__main__":
     parser.add_argument("-s", type=int, default=100, help="Slot width of the slot in the center of the waveguide.")
     parser.add_argument("-r", type=float, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
     parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
+    parser.add_argument("-v", type=float, default=100.0, help="Electron accelerating voltage in kV.")
     args = parser.parse_args()
     main(args)
