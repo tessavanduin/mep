@@ -1,5 +1,6 @@
 #!/bin/bash
 # Extract real and imaginary frequencies from output*_.txt files
+# Code produced with help of chatGPT
 
 # Usage: ./extract_freqs.sh N
 if [ $# -ne 1 ]; then

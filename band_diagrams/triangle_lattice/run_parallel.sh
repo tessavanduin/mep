@@ -1,4 +1,5 @@
 #!/bin/bash
+# Code produced with help of chatGPT
 
 # Save old values
 OLD_OMP=$OMP_NUM_THREADS
