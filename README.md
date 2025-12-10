@@ -27,8 +27,7 @@ The repository includes two scripts to generate band diagram data for two geomet
 (time ./run_parallel.sh 64 8) > output.log 2>&1 &
 ```
 This will try to find eigen frequencies for 64 k points using 8 parallel processes, this will take the same time as computing 64/8 = 8 k points sequentially. Though, with this setup, always use less processes than that your CPU has cores to avoid context switching. Using more processes than cores will result in a massive slow down that may take even longer than computing everything sequentially.
-
-Furthermore, a notebook is included that can be used to plot the band diagrams.
+Furthermore, two notebook are included that can be used to plot band diagram data. One can be used to plot two sets of data in one plot, useful for when you want to combine even and odd mode simulations in the same figure.
 
 ### EELS
 EELS data can be generated using `EELS_3D.py`. It can be run using various CLI options that can be viewed by running the file with `-h`. The time series data is stored in the folder `EELS_3D-out/`. To compute the EELS, an additional simulation needs to be run that uses the same parameters but in an empty simulaiton domain, (this data is subtracted from the simulations with dielectric to find the induced electric field). Doing this is easy, one can specify the same simulation but run it with the option `-e` for `--empty`, this will create an empty simulation domain of the same size as if the specified crystal geometry would be there. Once the simulation has finished, the eels spectrum can be plotted by running the cells in `eels.ipynb`. You may have to change the name of the files that are loaded, but it will generally attempt to load 1 file for an empty simulation domain for subtraction and all files that have CRYSTAL in their name.
