@@ -1,7 +1,7 @@
 # Photonic Crystal Simulations
 This repository is dedicated to simulating certain photonic crystal (PhC) properties such as their band diagrams and electron energy loss spectra (EELS) using the [MEEP](https://meep.readthedocs.io/) python package for Finite Difference Time Domain Methods (FDTD). It is part of my applied physics bachelor thesis at TU Delft.
 
-This project uses Meep, which is licensed under GPL-2.0+.
+This project uses Meep, which is licensed under GPL-2.0.
 Meep is not distributed as part of this repository.
 
 ## Instalation
