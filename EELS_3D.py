@@ -1,149 +1,136 @@
 import argparse
 import meep as mp
 import numpy as np
-import h5py
 from geometries import *
 from helper_functions import E_to_speed
-from helper_functions import create_flux_box
-from helper_functions import integrate_flux_box
-from divergence import divE_at_point
 
 q_e =  1.60217646e-19
 
 def main(args):
-    a_nm = args.a # Default: 426
-    # Some parameters to describe the geometry:
+    # --- Parameters ---
+    a_nm = args.a           # Default: 426
     a = 1                   # Lattice constant
     h = np.sqrt(3)*a        # Unit cell height
+
     thickness = args.d/a_nm # Slab thickness
     r = args.r              # Radius of holes, r = 0.245*a
     shift = (args.W-1)/2*h  # Amount by which the two halves are shifted up and down (0.1 creates a W1.2 wvg)
     sw = args.s/a_nm        # Slot width, sw = 100nm = 100/426 * a.
 
     crystal_x_width = args.x # Default: 36
+
+    # Build geometry
     if args.cavity:
-        print("Using geometry: SlottedTriangleLatticeCavity")
-        simulation_domain = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
+        print("Using cavity geometry")
+        simulation_domain = SlottedTriangleLatticeCavity(
+            r, a, thickness, shift, sw,
+            index=args.n, 
+            width=crystal_x_width
+        )
     else:
-        print("Using geometry: SlottedTriangleLattice")
-        simulation_domain = SlottedTriangleLattice(r, a, thickness, shift, sw, index=args.n, width=crystal_x_width)
-    geometry, cell = simulation_domain.geometry, simulation_domain.cell
-
-    air_offset = mp.Vector3(1,1,1)*12*thickness
-    cell = cell + air_offset
-    if args.test and not args.plot: cell = mp.Vector3(2,2,2)
-
-    # resolution of 18 nm
-    resolution=np.ceil(a_nm/18) # convert resolution in terms of nm to resolution in terms of a
-    print(f"RESOLUTION: {resolution} = {a_nm/resolution} nm")
-    print("Accelarating voltage:", args.v, "kV")
-    print()
-
-    dpml = thickness    # PML thickness
-    # pml_layers = [mp.PML(dpml, direction=mp.Y), mp.PML(dpml, direction=mp.Z)]
-    pml_layers = [mp.PML(thickness=dpml)]
-    if args.empty: geometry=None
-    sim = mp.Simulation(cell_size=cell,
-                        geometry=geometry,
-                        boundary_layers=pml_layers,
-                        symmetries=None,
-                        resolution=resolution)
-
-    if args.plot:
-        if sim.dimensions == 3:
-            sim.plot3D()
-        elif sim.dimensions == 2:
-            sim.plot2D()
-        return
-    filename = f"{'EMPTY' if args.empty else 'CRYSTAL'}_PML_a{crystal_x_width}-r" + str(int(r*1000)) + "-ex_air_flx3"
-    filename += f"_{'c1' if args.cavity else 'c0'}"
-    sim.use_output_directory()
-
-
-    # 100keV electron velocity
-    electron_v = E_to_speed(args.v*1e3)
-
-    # model the electron from the edge of the PML to the edge of the other PML
-    electron_path_length = cell.x - 2*dpml
-    start_pos = -0.5 * electron_path_length
-    def electron_path(t):
-        return mp.Vector3( start_pos + electron_v * t, 0, 0)
-
-    charge_density = resolution**3 * -q_e
-
-    def move_source(sim: mp.Simulation):
-        sim.change_sources(
-            [
-                mp.Source(
-                    mp.ContinuousSource(frequency=1e-20),
-                    component=mp.Ex,
-                    center=electron_path(sim.meep_time()),
-                    # amplitude=charge_density*electron_v
-                )
-            ]
+        print("Using slab geometry")
+        simulation_domain = SlottedTriangleLattice(
+            r, a, thickness, shift, sw, 
+            index=args.n, width=crystal_x_width
         )
 
+    geometry, cell = simulation_domain.geometry, simulation_domain.cell
 
-    flux_total = []
-    ds = (a/resolution)**2 # surface element in units of a
+    # Add air on all sides
+    air_offset = mp.Vector3(12*thickness,12*thickness,12*thickness)
+    cell = cell + air_offset
 
-    # Find flux through a small box following the electron
-    b = mp.Vector3(0.1,0.1,0.1) # cube size
-    def get_flux(sim: mp.Simulation):
-        b_center = electron_path(sim.meep_time()) # same position as electron
-        flux_box = create_flux_box(b_center, b)
-        flux = integrate_flux_box(sim, flux_box, ds)
-        flux_total.append(flux)
+    if args.test and not args.plot: 
+        cell = mp.Vector3(2,2,2)
 
-    # Find flux through big stationary box close to the edge of the simulation domain
-    big_box = cell - 2.1*mp.Vector3(dpml,dpml,dpml)
-    flux_box = create_flux_box(mp.Vector3(), big_box)
-    def get_flux_2(sim: mp.Simulation):
-        flux = integrate_flux_box(sim, flux_box, ds)
-        flux_total.append(flux)
+    # --- resolution ---
+    resolution = int(np.ceil(a_nm/18))      # convert resolution in terms of nm to resolution in terms of a
+    print(f"Resolution: {resolution} pixels per unit")
 
-    def get_divergence(sim: mp.Simulation):
-        flux = divE_at_point(sim, electron_path(sim.meep_time()))
-        flux_total.append(flux)
+    # --- Boundary conditions ---
+    dpml = thickness    # PML thickness
+    pml_layers = [mp.PML(thickness=dpml)]
 
-
-    monitor_width = crystal_x_width # monitor_width < electron_path_length
-    start_pos_till_monitor = (electron_path_length - monitor_width)/2
-    start_time = start_pos_till_monitor/electron_v
-    end_time   = (start_pos_till_monitor + monitor_width)/electron_v
-
-    sim.run(move_source,
-        mp.after_time(
-            start_time,
-            mp.before_time(
-                end_time,
-                get_flux_2,
-                mp.to_appended(filename, mp.in_volume(mp.Volume(mp.Vector3(), mp.Vector3(monitor_width, 0, 0)), mp.output_efield_x))
-            )
-        ),
-        until=electron_path_length / electron_v
+    # --- Simulation ---
+    sim = mp.Simulation(
+        cell_size=cell,
+        geometry=geometry,
+        boundary_layers=pml_layers,
+        resolution=resolution
     )
 
-    with h5py.File(f"EELS_3D-out/EELS_3D-{filename}.h5", "r+") as f:
-        dset = f.require_dataset("flux", (len(flux_total)), dtype='<f8', data=flux_total)
+    if args.plot:
+        sim.plot3D()
+        return
+    
+    sim.use_output_directory()
+
+    # --- Beam source ---
+    # Approximate electron beam as a moving point source
+    
+    electron_v = E_to_speed(args.v * 1e3)
+
+    beam_length = cell.z - 2 * dpml
+    start_z = -0.5 * beam_length
+
+    def electron_pos(t):
+        return mp.Vector3(0, 0, start_z + electron_v * t)
+
+    def update_source(sim):
+        sim.change_sources([
+            mp.Source(
+                mp.GaussianSource(frequency=1e-3, fwidth=1e-3), 
+                component=mp.Ez,
+                center=electron_pos(sim.meep_time())
+            )
+        ])
+
+    # --- Field output ---
+
+    monitor_volume = mp.Volume(
+        center=mp.Vector3(),
+        size=cell
+    )
+
+    filename = (
+        f"{'EMPTY' if args.empty else 'CRYSTAL'}"
+        f"_Efield_a{crystal_x_width}_r{int(r*1000)}"
+        f"_{'cavity' if args.cavity else 'no_cavity'}"
+    )
+
+    # --- Run simulation ---
+    sim.run(
+        update_source,
+
+        # Recor E-Field
+        mp.to_appended(
+            "Efield",
+            mp.in_volume(
+                monitor_volume,
+                mp.output_efield
+            )
+        ),
+
+        until = beam_length / electron_v
+    )
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--plot", action='store_true', help="Plot the defined geometry.")
-    parser.add_argument("-e", "--empty", action='store_true', help="Run the simulation in an empty simulation " \
-    "domain with size as if the specified geometry would be there.")
-    parser.add_argument("-c", "--cavity", action='store_true', help="Add shifted holes in the middle.")
-    parser.add_argument("-t", "--test", action='store_true', help="Use small cell to test I/O." \
-    "Ignored if -p is specified")
-    parser.add_argument("-a", type=int, default=426, help="Allows for specifying parameters as fraction of a. " \
-    "The other non-ratio parameters would be divided by 'a' prior to being used in the simulation. " \
-    "This is the same as setting a=1 and specifying all parameters as ratios.")
-    parser.add_argument("-d", type=int, default=220, help="Thickness of your structure.")
-    parser.add_argument("-x", type=int, default=36, help="X length of the crystal.")
-    parser.add_argument("-W", type=int, default=1.2, help="Width of the center waveguide.")
-    parser.add_argument("-s", type=int, default=100, help="Slot width of the slot in the center of the waveguide.")
-    parser.add_argument("-r", type=float, default=0.245, help="Ratio of hole radius to a. That is, radius/a.")
-    parser.add_argument("-n", type=float, default=3.45, help="Square root of the material permittivity.")
-    parser.add_argument("-v", type=float, default=100.0, help="Electron accelerating voltage in kV.")
+    
+    parser.add_argument("-p", "--plot", action="store_true")
+    parser.add_argument("-e", "--empty", action="store_true")
+    parser.add_argument("-c", "--cavity", action="store_true")
+    parser.add_argument("-t", "--test", action="store_true")
+
+    parser.add_argument("-a", type=int, default=426)
+    parser.add_argument("-d", type=int, default=220)
+    parser.add_argument("-x", type=int, default=36)
+    parser.add_argument("-W", type=float, default=1.2)
+    parser.add_argument("-s", type=int, default=100)
+    parser.add_argument("-r", type=float, default=0.245)
+    parser.add_argument("-n", type=float, default=3.45)
+    parser.add_argument("-v", type=float, default=100.0)
+
     args = parser.parse_args()
     main(args)
