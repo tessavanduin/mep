@@ -57,28 +57,40 @@ class SlottedTriangleLattice:
             sw (float, optional): Width of the air slot. Defaults to 0.
             index (float, optional): Square root of permittivity. Defaults to 3.45 (Silicon).
         """
-        h = np.sqrt(3)*a    # Height of a unit cell
-        cell = mp.Vector3((width)*a, 6*h+2*shift, thickness)
+        h = np.sqrt(3)*a
+        Nx = width
 
-        # Create the dielectric slab
-        b = mp.Block(center=mp.Vector3(0,0,0), size=cell, material=mp.Medium(index=index))
-        geometry = [b]
+        cell_y = 6*h + 2*shift
+        cell = mp.Vector3(Nx * a, cell_y, thickness)
 
-        ## Create row of SlottedTriangleLattice "unit cells"
-        # for T in np.arange(1,width+1) - (width+1)/2:
-        #     create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0), geometry)
+        geometry = []
 
-        slotted_triangle_strips = []
-        for T in np.arange(1,width+1) - (width+1)/2:
-            slotted_triangle_strips.append(create_slab_holes(r, a, h, shift, mp.Vector3(T,0,0)))
+        # slab FIRST
+        geometry.append(
+            mp.Block(
+                center=mp.Vector3(0,0,0),
+                size=cell,
+                material=mp.Medium(index=index)
+            )
+        )
 
-        if not mask: mask = width*[True]
-        for i, strip in enumerate(list(np.array(slotted_triangle_strips)[np.array(mask)])):
-            geometry.extend(strip)
+        # unit cells
+        for i in range(Nx):
+            x_shift = (i - (Nx-1)/2) * a
+            geometry.extend(
+                TriangleUnitCell(r, a, coords=mp.Vector3(x_shift, 0, 0)).geometry
+            )
 
-        # Create the air slot
-        geometry.append( mp.Block(size=mp.Vector3(mp.inf,sw,mp.inf)) )
+        # slot
+        geometry.append(
+            mp.Block(
+                center=mp.Vector3(0,0,0),
+                size=mp.Vector3(cell.x, sw, thickness),
+                material=mp.air
+            )
+        )
 
+        # assign ONCE at end
         self.geometry = geometry
         self.cell = cell
 

@@ -6,7 +6,7 @@ from helper_functions import E_to_speed
 
 q_e =  1.60217646e-19
 
-def main(args):
+def build_sim(args, empty=False):
     # --- Parameters ---
     a_nm = args.a           # Default: 426
     a = 1                   # Lattice constant
@@ -19,33 +19,37 @@ def main(args):
 
     crystal_x_width = args.x # Default: 36
 
-    # Build geometry
-    if args.cavity:
-        print("Using cavity geometry")
-        simulation_domain = SlottedTriangleLatticeCavity(
+    # --- Geometry ---
+    if empty:
+        print("Building EMPTY simulation (no geometry)")
+        geometry = None
+
+        simulation_domain = SlottedTriangleLattice(
             r, a, thickness, shift, sw,
-            index=args.n, 
+            index=args.n,
             width=crystal_x_width
         )
     else:
-        print("Using slab geometry")
-        simulation_domain = SlottedTriangleLattice(
-            r, a, thickness, shift, sw, 
-            index=args.n, width=crystal_x_width
-        )
+        print("Building CRYSTAL simulation")
+        if args.cavity:
+            simulation_domain = SlottedTriangleLatticeCavity(
+                r, a, thickness, shift, sw,
+                index=args.n,
+                width=crystal_x_width
+            )
+        else:
+            simulation_domain = SlottedTriangleLattice(
+                r, a, thickness, shift, sw,
+                index=args.n,
+                width=crystal_x_width
+            )
 
-    geometry, cell = simulation_domain.geometry, simulation_domain.cell
+        geometry = simulation_domain.geometry
 
-    # Add air on all sides
-    air_offset = mp.Vector3(12*thickness,12*thickness,12*thickness)
-    cell = cell + air_offset
-
-    if args.test and not args.plot: 
-        cell = mp.Vector3(2,2,2)
+    cell =  simulation_domain.cell + mp.Vector3(12, 12, 12) * thickness
 
     # --- resolution ---
-    resolution = int(np.ceil(a_nm/18))      # convert resolution in terms of nm to resolution in terms of a
-    print(f"Resolution: {resolution} pixels per unit")
+    resolution = int(np.ceil(a_nm/18))      
 
     # --- Boundary conditions ---
     dpml = thickness    # PML thickness
@@ -59,78 +63,81 @@ def main(args):
         resolution=resolution
     )
 
-    if args.plot:
-        sim.plot3D()
-        return
-    
-    sim.use_output_directory()
-
     # --- Beam source ---
     # Approximate electron beam as a moving point source
     
     electron_v = E_to_speed(args.v * 1e3)
+    path_length = cell.x - 2 * dpml
+    start_pos = -0.5 * path_length
 
-    beam_length = cell.z - 2 * dpml
-    start_z = -0.5 * beam_length
+    def electron_path(t):
+        return mp.Vector3(0, 0, start_pos + electron_v * t)
 
-    def electron_pos(t):
-        return mp.Vector3(0, 0, start_z + electron_v * t)
-
-    def update_source(sim):
+    def move_source(sim):
         sim.change_sources([
             mp.Source(
-                mp.GaussianSource(frequency=1e-3, fwidth=1e-3), 
+                mp.ContinuousSource(frequency=1e-20),
                 component=mp.Ez,
-                center=electron_pos(sim.meep_time())
+                center=electron_path(sim.meep_time()),
+                amplitude=-q_e
             )
         ])
 
     # --- Field output ---
-
-    monitor_volume = mp.Volume(
-        center=mp.Vector3(),
-        size=cell
-    )
-
     filename = (
-        f"{'EMPTY' if args.empty else 'CRYSTAL'}"
-        f"_Efield_a{crystal_x_width}_r{int(r*1000)}"
-        f"_{'cavity' if args.cavity else 'no_cavity'}"
+        f"{args.mode.upper()}"
+        f"_a{args.x}"
+        f"_r{int(args.r*1000)}"
+        f"_x{args.x}"
+        f"_W{args.W}"
+        f"_cavity{int(args.cavity)}"
     )
 
-    # --- Run simulation ---
+    return sim, move_source, path_length, electron_v, filename
+
+def run_sim(sim, move_source, path_length, electron_v, filename):
     sim.run(
-        update_source,
-
-        # Recor E-Field
-        mp.to_appended(
-            "Efield",
-            mp.in_volume(
-                monitor_volume,
-                mp.output_efield
-            )
+        move_source,
+        mp.at_every(
+            5,
+            mp.to_appended(filename, mp.output_efield_z)
         ),
-
-        until = beam_length / electron_v
+        until=path_length / electron_v
     )
-    
+
+
+def main(args):
+
+    is_empty = (args.mode == "empty")
+
+    sim, move_source, L, v, fname = build_sim(args, empty=is_empty)
+
+    run_sim(sim, move_source, L, v, fname)
+
+    print("Done.")
+    print(f"Mode: {args.mode}")
+    print(f"Output file: {fname}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    
-    parser.add_argument("-p", "--plot", action="store_true")
-    parser.add_argument("-e", "--empty", action="store_true")
-    parser.add_argument("-c", "--cavity", action="store_true")
-    parser.add_argument("-t", "--test", action="store_true")
+
+    parser.add_argument(
+        "--mode",
+        choices=["empty", "crystal"],
+        required=True,
+        help="Run either EMPTY or CRYSTAL simulation"
+    )
 
     parser.add_argument("-a", type=int, default=426)
     parser.add_argument("-d", type=int, default=220)
-    parser.add_argument("-x", type=int, default=36)
+    parser.add_argument("-x", type=int, default=9)
     parser.add_argument("-W", type=float, default=1.2)
     parser.add_argument("-s", type=int, default=100)
     parser.add_argument("-r", type=float, default=0.245)
     parser.add_argument("-n", type=float, default=3.45)
     parser.add_argument("-v", type=float, default=100.0)
+    parser.add_argument("-c", "--cavity", action="store_true")
 
     args = parser.parse_args()
     main(args)

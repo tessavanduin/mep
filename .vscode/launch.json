@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run EMPTY",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/EELS_3D.py",
+            "args": ["--mode", "empty"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Run CRYSTAL",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/EELS_3D.py",
+            "args": ["--mode", "crystal"],
+            "console": "integratedTerminal"
+        }
+    ]
+}
