@@ -73,15 +73,26 @@ def build_sim(args, empty=False):
     def electron_path(t):
         return mp.Vector3(0, 0, start_pos + electron_v * t)
 
+    src_width = 2 / resolution   
+    src_size  = mp.Vector3(2*src_width, 2*src_width, 2*src_width)
+
+    def src_amplitude(r):
+        rsq = r.dot(r)
+        sigma2 = src_width**2
+        return -electron_v * np.exp(-rsq / (2*sigma2))
+    
+
     def move_source(sim):
         sim.change_sources([
             mp.Source(
-                mp.ContinuousSource(frequency=1e-20),
+                mp.ContinuousSource(frequency=0.01),
                 component=mp.Ez,
                 center=electron_path(sim.meep_time()),
-                amplitude=-q_e
+                size=src_size,
+                amp_func=src_amplitude
             )
         ])
+
 
     # --- Field output ---
     filename = (
