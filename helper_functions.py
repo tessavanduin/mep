@@ -1,5 +1,4 @@
 import numpy as np
-# import meep as mp
 
 c = 299792458
 h_bar = 1.054571817e-34
@@ -18,53 +17,30 @@ def E_to_omega(E: float, length_scale: float):
     """
     return E*q_e*length_scale/(h_bar*2*np.pi*c)
 
-def E_to_speed(E: float):
-    """Convert energy in eV to relativistic electron velocity
+def E_to_speed(E_keV: float) -> float:
+    """Return beta = v/c from kinetic energy in keV."""
+    E_eV = E_keV * 1e3
+    gamma = 1 + (E_eV * q_e) / (m_e * c**2)
+    beta = np.sqrt(1 - 1 / gamma**2)
+    return beta
 
-    Args:
-        E (float): Kinetic energy of electron
-
-    Returns:
-        float: Velocity in N.U.
-    """
-    return np.sqrt( 1 - ( 1 / (1 + E*q_e / (m_e*c**2) )**2 ) )
-
-# def create_flux_box(cent: mp.Vector3, b: mp.Vector3):
-#     """Create three list of associated components of flux planes, component and sign.
-
-#     Args:
-#         cent (mp.Vector3): Center of the flux volume you want to integrate over.
-#         b (mp.Vector3): Size of the flux volume.
-
-#     Returns:
-#         surfaces, components, signs: surfaces over which to integrate
-#     """
-#     g = b/2
-#     surfaces = [
-#         mp.Volume(center=cent + mp.Vector3( g.x,0,0), size= b - mp.Vector3(b.x,0,0)),
-#         mp.Volume(center=cent + mp.Vector3(-g.x,0,0), size= b - mp.Vector3(b.x,0,0)),
-#         mp.Volume(center=cent + mp.Vector3(0, g.y,0), size= b - mp.Vector3(0,b.y,0)),
-#         mp.Volume(center=cent + mp.Vector3(0,-g.y,0), size= b - mp.Vector3(0,b.y,0)),
-#         mp.Volume(center=cent + mp.Vector3(0,0, g.z), size= b - mp.Vector3(0,0,b.z)),
-#         mp.Volume(center=cent + mp.Vector3(0,0,-g.z), size= b - mp.Vector3(0,0,b.z)),
-#     ]
-#     components = [mp.Ex, mp.Ex, mp.Ey, mp.Ey, mp.Ez, mp.Ez]
-#     signs = [1,-1,1,-1,1,-1]
-#     return surfaces, components, signs
-
-# def integrate_flux_box(sim: mp.Simulation, flux_box: tuple, ds: float):
-#     """Integrate a field over the surface of a flux box
-
-#     Args:
-#         sim (mp.Simulation): MEEP simulation in a certain state
-#         flux_box (tuple): tuple of surfaces, field components and signs
-#         ds (float): surface elements
-
-#     Returns:
-#         float: total flux through the surface of the volume specified by `flux_box`
-#     """
-#     flux = 0
-#     for surf, comp, sign in zip(*flux_box):
-#         field = sim.get_array(comp, vol=surf)
-#         flux += sign*np.sum(field)
-#     return flux*ds
+def visualize_geometry(geometry, width, a, h, r, shift, mode, filename):
+    import meep as mp
+    import matplotlib.pyplot as plt
+    
+    # Create a 2D simulation for visualization (set thickness to near-zero)
+    sim = mp.Simulation(
+        cell_size=mp.Vector3(width * a, width * h, 0),
+        geometry=geometry,
+        resolution=20
+    )
+    
+    plt.figure(figsize=(12, 8))
+    sim.plot2D()
+    plt.title(f"PhC Geometry (xy-plane): {mode}, r={r:.3f}a, shift={shift:.3f}h")
+    plt.tight_layout()
+    
+    # Save to file instead of showing (works in terminal environments)
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    print(f"Geometry visualization saved to {filename}")
+    plt.close()
