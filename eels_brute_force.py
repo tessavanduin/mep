@@ -300,6 +300,84 @@ def temporal_ft(times, E_xt, omegas):
     return phase @ (Ew * dt)                        # [nomega, nx]
 
 
+def _pade_spectrum_1d(signal, dt, omegas, M=None):
+    r"""Padé-approximant spectral estimate of a single time series.
+
+    Given uniformly-sampled signal s[n] (n=0..N-1, step dt), build the
+    [L/M] Pade approximant of its z-transform and evaluate the resulting
+    rational spectrum at z = e^{i omega dt}. This fits a sum of damped
+    sinusoids (poles = resonances), so it resolves narrow lines from short
+    records far better than a windowed DFT.
+
+    Method: the signal's z-transform S(z) = sum s[n] z^{-n} is approximated
+    by P(z)/Q(z). The Q (denominator) coefficients come from solving the
+    Hankel system built from the autocorrelation-like lag matrix (the
+    standard Pade/Prony linear system); P follows by convolution. We then
+    evaluate P/Q on the unit circle at the requested frequencies.
+
+    signal : complex [N]
+    dt     : scalar time step (uniform)
+    omegas : [nomega] MEEP angular frequencies to evaluate
+    M      : denominator order (number of poles). Default N//2 (capped).
+    Returns complex [nomega].
+    """
+    s = np.asarray(signal, dtype=complex)
+    N = len(s)
+    if M is None:
+        M = min(N // 2, 200)          # cap order for conditioning/speed
+    L = M                              # symmetric [M/M] approximant
+
+    # Build the linear system for denominator coeffs b (b0 = 1):
+    #   sum_{k=1..M} b_k s[L + j - k] = -s[L + j],  j = 1..M
+    rows = []
+    rhs = []
+    for j in range(1, M + 1):
+        idx = L + j - np.arange(1, M + 1)
+        if np.any(idx < 0) or (L + j) >= N:
+            continue
+        rows.append(s[idx])
+        rhs.append(-s[L + j])
+    if len(rows) < M:
+        # not enough samples for this order: fall back to DFT for this series
+        phase = np.exp(-1j * np.outer(omegas, np.arange(N) * dt))
+        return phase @ (s * dt)
+    A = np.array(rows)
+    rhs = np.array(rhs)
+    # least-squares (robust to mild rank deficiency) for the poles
+    b_tail, *_ = np.linalg.lstsq(A, rhs, rcond=None)
+    b = np.concatenate(([1.0], b_tail))      # denominator coeffs, b0=1
+
+    # numerator coeffs a_k = sum_{m=0..k} b_m s[k-m], k=0..L
+    a = np.zeros(L + 1, dtype=complex)
+    for k in range(L + 1):
+        acc = 0.0 + 0j
+        for m in range(min(k, M) + 1):
+            acc += b[m] * s[k - m]
+        a[k] = acc
+
+    # evaluate P(z)/Q(z) at z = e^{i omega dt}  (z^{-1} = e^{-i omega dt})
+    zinv = np.exp(-1j * omegas * dt)          # [nomega]
+    ka = np.arange(L + 1)
+    kb = np.arange(M + 1)
+    P = (zinv[:, None] ** ka[None, :]) @ a    # [nomega]
+    Q = (zinv[:, None] ** kb[None, :]) @ b    # [nomega]
+    Q = np.where(np.abs(Q) < 1e-30, 1e-30, Q)
+    return (P / Q) * dt                        # match DFT amplitude scaling
+
+
+def temporal_ft_pade(times, E_xt, omegas, M=None):
+    r"""Padé version of temporal_ft. Same signature/return shape.
+    Requires (approximately) uniform time sampling -- MEEP's at_every gives
+    this. E_xt: [ntime, nx] -> returns [nomega, nx]."""
+    times = np.asarray(times)
+    dt = np.median(np.diff(times))
+    ntime, nx = E_xt.shape
+    out = np.empty((len(omegas), nx), dtype=complex)
+    for j in range(nx):
+        out[:, j] = _pade_spectrum_1d(E_xt[:, j], dt, omegas, M=M)
+    return out
+
+
 def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm):
     r"""eq.(1): Gamma(omega) = (e/(pi hbar omega)) Re[ \int E_ind_x(x,omega)
     e^{i omega x / v} dx ].  Here omega is angular freq in MEEP units (c/a).
@@ -359,6 +437,11 @@ def main():
     p.add_argument("--Textra", type=float, default=400.0,
                    help="ringdown time after transit [MEEP units]")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
+    p.add_argument("--pade", action="store_true",
+                   help="use Pade-approximant temporal transform (paper's method) "
+                        "instead of the windowed DFT")
+    p.add_argument("--pade-order", type=int, default=None,
+                   help="Pade denominator order M (number of poles); default N//2 capped")
     p.add_argument("--out", type=str, default="eels_spectrum.npz")
     args = p.parse_args()
 
@@ -425,7 +508,10 @@ def main():
     f_grid = eV_to_meep_freq(E_eV, args.a)        # MEEP freq
     omegas_meep = 2 * np.pi * f_grid              # MEEP angular freq
 
-    E_xw = temporal_ft(t_c, E_ind, omegas_meep)
+    E_xw = temporal_ft(t_c, E_ind, omegas_meep) if not args.pade \
+        else temporal_ft_pade(t_c, E_ind, omegas_meep, M=args.pade_order)
+    if args.pade:
+        print("[info] using Pade-approximant temporal transform")
     gamma = assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm)
     gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.040)
 
