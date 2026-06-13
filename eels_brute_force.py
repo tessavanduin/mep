@@ -434,6 +434,18 @@ def main():
     p.add_argument("--Emin", type=float, default=0.70, help="spectrum min [eV]")
     p.add_argument("--Emax", type=float, default=0.90, help="spectrum max [eV]")
     p.add_argument("--nE", type=int, default=400, help="spectral points")
+    p.add_argument("--src-Emin", type=float, default=None,
+                   help="source band minimum [eV]; default = --Emin. Set wider "
+                        "(e.g. 0) to deposit energy across a broad range.")
+    p.add_argument("--src-Emax", type=float, default=None,
+                   help="source band maximum [eV]; default = --Emax. Set wider "
+                        "(e.g. 3) for a full-range EELS spectrum.")
+    p.add_argument("--save-fields", type=str, default=None,
+                   help="save the recorded induced field to this .npz and exit "
+                        "after the (expensive) FDTD, so you can re-transform later")
+    p.add_argument("--from-fields", type=str, default=None,
+                   help="skip FDTD; load a previously --save-fields file and only "
+                        "run the (cheap) transform + assembly + broadening")
     p.add_argument("--Textra", type=float, default=400.0,
                    help="ringdown time after transit [MEEP units]")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
@@ -463,11 +475,35 @@ def main():
     print(f"[info] resolution = {resolution:.2f} px/a  "
           f"(~{args.a/resolution:.1f} nm/px)")
 
-    # spectral window -> MEEP centre freq + bandwidth for the source pulse
-    f_meep = eV_to_meep_freq(np.array([args.Emin, args.Emax]), args.a)
-    fcen = float(np.mean(f_meep))
-    df = float(abs(f_meep[1] - f_meep[0]) * 1.4 + 0.05)  # pad the pulse bw
-    print(f"[info] source fcen = {fcen:.4f} c/a, df = {df:.4f} c/a")
+    # ---- SOURCE bandwidth: independent of the output window ----
+    # The electron field is physically broadband. We build a Gaussian-pulse
+    # source spanning [src_Emin, src_Emax], which default to the output window
+    # but can be set wider (e.g. 0..3 eV) via --src-Emin/--src-Emax so the FDTD
+    # actually deposits energy across the whole range you want to analyze.
+    src_Emin = args.src_Emin if args.src_Emin is not None else args.Emin
+    src_Emax = args.src_Emax if args.src_Emax is not None else args.Emax
+    # Gaussian source: center between the two, bandwidth covers the span.
+    # Work in frequency: cover [f(src_Emax), f(src_Emin)] (note E and f both
+    # monotonic, higher E -> higher f).
+    f_lo = float(eV_to_meep_freq(src_Emin if src_Emin > 0 else 0.02, args.a))
+    f_hi = float(eV_to_meep_freq(src_Emax, args.a))
+    fcen = 0.5 * (f_lo + f_hi)
+    df = (f_hi - f_lo) * 1.2 + 0.05   # pad so the pulse fully covers the span
+    print(f"[info] source covers E=[{src_Emin:.2f}, {src_Emax:.2f}] eV "
+          f"-> fcen={fcen:.4f} c/a, df={df:.4f} c/a")
+
+    # ---- resolution sanity check against the highest source energy ----
+    # need ~8 px per wavelength in the highest-index material at src_Emax
+    nm_per_px = args.a / resolution
+    lam_hi_vac_nm = _H_EV * _C / src_Emax / 1e-9   # vacuum wavelength [nm]
+    lam_in_si_nm = lam_hi_vac_nm / args.n          # wavelength in silicon
+    px_per_lam_si = lam_in_si_nm / nm_per_px
+    print(f"[info] at E={src_Emax:.2f} eV: lambda_Si ~ {lam_in_si_nm:.0f} nm "
+          f"= {px_per_lam_si:.1f} px/wavelength")
+    if px_per_lam_si < 6:
+        E_trust = _H_EV * _C / (6 * nm_per_px * args.n * 1e-9)
+        print(f"[WARN] under-resolved at the top of the band -- trust the "
+              f"spectrum only below ~{E_trust:.2f} eV. Raise --res for higher E.")
 
     geometry, struct_cell, thickness, a_nm = build_phc(args)
 
@@ -480,31 +516,56 @@ def main():
     # electron flies through the slot centre: y0 = 0 (slot midline), z0 = 0 (mid-plane)
     y0, z0 = 0.0, 0.0
 
-    # --- run 1: cavity ---
-    print("[run] cavity ...")
-    t_c, xs, E_c = run_path_recording(geometry, cell, beta, y0, z0,
-                                      fcen, df, resolution, dpml,
-                                      args.Textra, label="cavity")
+    if args.from_fields:
+        # ---- cheap path: load saved induced field, skip all FDTD ----
+        print(f"[load] induced field from {args.from_fields}")
+        d = np.load(args.from_fields)
+        t_c = d["t"]
+        xs = d["xs"]
+        E_ind = d["E_ind"]
+        # beta/resolution come from the file for consistency
+        beta = float(d["beta"])
+        print(f"[info] loaded field: {E_ind.shape[0]} timesteps x "
+              f"{E_ind.shape[1]} path pixels")
+    else:
+        # --- run 1: cavity ---
+        print("[run] cavity ...")
+        t_c, xs, E_c = run_path_recording(geometry, cell, beta, y0, z0,
+                                          fcen, df, resolution, dpml,
+                                          args.Textra, label="cavity")
 
-    # --- run 2: empty (vacuum) domain, identical recording ---
-    print("[run] empty ...")
-    t_e, xs_e, E_e = run_path_recording([], cell, beta, y0, z0,
-                                        fcen, df, resolution, dpml,
-                                        args.Textra, label="empty")
+        # --- run 2: empty (vacuum) domain, identical recording ---
+        print("[run] empty ...")
+        t_e, xs_e, E_e = run_path_recording([], cell, beta, y0, z0,
+                                            fcen, df, resolution, dpml,
+                                            args.Textra, label="empty")
 
-    # align time bases (they should match; interpolate empty onto cavity grid if not)
-    if E_e.shape != E_c.shape:
-        from numpy import interp
-        E_e_i = np.empty_like(E_c)
-        for j in range(E_c.shape[1]):
-            E_e_i[:, j].real = interp(t_c, t_e, E_e[:, j].real)
-            E_e_i[:, j].imag = interp(t_c, t_e, E_e[:, j].imag)
-        E_e = E_e_i
+        # align time bases (interpolate empty onto cavity grid if needed)
+        if E_e.shape != E_c.shape:
+            from numpy import interp
+            E_e_i = np.empty_like(E_c)
+            for j in range(E_c.shape[1]):
+                E_e_i[:, j].real = interp(t_c, t_e, E_e[:, j].real)
+                E_e_i[:, j].imag = interp(t_c, t_e, E_e[:, j].imag)
+            E_e = E_e_i
 
-    E_ind = E_c - E_e  # induced field, transients removed
+        E_ind = E_c - E_e  # induced field, transients removed
 
-    # --- temporal FT + eq.(1) assembly ---
-    E_eV = np.linspace(args.Emin, args.Emax, args.nE)
+        if args.save_fields:
+            np.savez(args.save_fields, t=t_c, xs=xs, E_ind=E_ind,
+                     beta=beta, resolution=resolution)
+            print(f"[saved] induced field -> {args.save_fields}")
+            print("[info] FDTD complete. Re-run with --from-fields "
+                  f"{args.save_fields} to transform without re-simulating.")
+            return
+
+    # --- temporal FT + eq.(1) assembly (cheap; re-runnable via --from-fields) ---
+    # guard against E=0 (divide-by-zero in freq conversion and the 1/omega prefactor)
+    E_lo = max(args.Emin, 1e-3)
+    if args.Emin < E_lo:
+        print(f"[info] clamping spectrum minimum from {args.Emin} to {E_lo} eV "
+              f"(E=0 is singular in the 1/omega prefactor)")
+    E_eV = np.linspace(E_lo, args.Emax, args.nE)
     f_grid = eV_to_meep_freq(E_eV, args.a)        # MEEP freq
     omegas_meep = 2 * np.pi * f_grid              # MEEP angular freq
 

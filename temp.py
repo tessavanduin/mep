@@ -1,21 +1,38 @@
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 
-data = np.load("/home/tessa/PhC-EELS/eels_spectrum.npz")
+f = np.load(sys.argv[1] if len(sys.argv) > 1 else "eels_spectrum.npz")
+E = f["E_eV"]
+raw = f["gamma"]
+conv = f["gamma_conv"]
 
-E = data["E_eV"]          # x-axis
-gamma = data["gamma"]     # raw spectrum
-gamma_c = data["gamma_conv"]  # broadened spectrum
+fig, ax = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
 
-plt.figure(figsize=(6,4))
-plt.plot(E, gamma_c, label="Gamma (broadened)")
-plt.plot(E, gamma, '--', alpha=0.5, label="Gamma (raw)")
+ax[0].plot(E, raw, lw=0.8, alpha=0.5, label="Gamma (raw)")
+ax[0].plot(E, conv, lw=1.8, label="Gamma (40 meV broadened)")
+ax[0].set_ylabel("Loss prob. (arb.)")
+ax[0].legend()
+ax[0].set_title("EELS spectrum")
 
-plt.xlabel("Energy loss (eV)")
-plt.ylabel("Loss probability (arb. units)")
-plt.title("EELS Spectrum")
-plt.xlim(-0.25, 2)        # your usual range
-plt.legend()
-plt.grid(alpha=0.3)
+# also show |gamma| so a peak that dips negative still shows its location
+ax[1].plot(E, np.abs(conv), lw=1.8, color="C3")
+ax[1].set_ylabel("|Gamma| broadened")
+ax[1].set_xlabel("Energy loss (eV)")
+
+for a in ax:
+    a.grid(alpha=0.3)
+    a.axhline(0, color="k", lw=0.5)
+
 plt.tight_layout()
+plt.savefig("eels_plot.png", dpi=130)
+print("saved eels_plot.png")
+
+# diagnostics
+print(f"E range: [{E.min():.3f}, {E.max():.3f}] eV")
+print(f"gamma:      min={raw.min():.3e}  max={raw.max():.3e}")
+print(f"gamma_conv: min={conv.min():.3e}  max={conv.max():.3e}")
+imax = np.nanargmax(np.abs(conv))
+print(f"largest |gamma_conv| at {E[imax]:.4f} eV "
+      f"({'edge!' if imax in (0, len(E)-1) else 'interior'})")
 plt.show()
