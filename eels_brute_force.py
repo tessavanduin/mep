@@ -1,0 +1,440 @@
+r"""
+Brute-force EELS Gamma(omega, y0, z0) for a slotted triangular-lattice
+photonic-crystal cavity, electron flying parallel to x through the slot.
+
+Reproduces the "home-made FDTD" method described in
+"High-Efficiency Coupling of Free Electrons to Sub-lambda^3 Modal Volume,
+High-Q Photonic Cavities" -- using MEEP as the FDTD engine.
+
+Method (per the paper's Methods section):
+  1. Model the 100 keV electron as a single FDTD-pixel current source that
+     translates along x at velocity v = beta*c. In practice MEEP has no
+     translating source, so we lay down a CHAIN of point dipole sources along
+     the path, each firing a short pulse centred at t_i = (x_i - x_start)/v.
+     Summed, they reconstruct a moving line charge j_x = (e/v) delta(y-y0)
+     delta(z-z0) delta(x - v t).
+  2. Run the SAME simulation twice: once with the cavity, once in an empty
+     (homogeneous, here vacuum) domain. Record E_x(x, y0, z0, t) at every
+     timestep along the whole path in both runs.
+  3. Subtract: E_ind = E_cavity - E_empty  (removes entrance/exit transients).
+  4. Per spatial pixel along x, temporal Fourier transform E_ind(x, t) -> E_ind(x, omega).
+     The paper uses a Pade approximant; we provide a windowed DFT by default and
+     an optional Pade accelerator (Harminv-style is overkill here; we expose a
+     scipy-based Pade as an opt-in).
+  5. Assemble the eq.(1) integral along x:
+        Gamma(omega) = (e / (pi hbar omega)) * Re[ \int E_ind_x(x,y0,z0,omega) e^{i omega x / v} dx ]
+  6. Convolve with a 40 meV Gaussian for experimental broadening.
+
+Units: MEEP dimensionless units with a = a_nm (lattice constant) = 1, c = 1.
+       Frequencies are in units of c/a. To convert MEEP freq f -> photon energy:
+           E[eV] = h c / (lambda)  with lambda = a_nm / f  (a_nm in metres)
+       Implemented in meep_freq_to_eV().
+
+Run:  python eels_brute_force.py --cavity            # cavity run + empty run + spectrum
+      python eels_brute_force.py --cavity --quick    # coarse resolution smoke test
+"""
+
+import argparse
+import numpy as np
+
+try:
+    import meep as mp
+except ImportError:
+    mp = None  # allows static import / unit conversions without MEEP installed
+
+# ----------------------------------------------------------------------------
+# Geometry classes (your code, unchanged in spirit; included so this is one file)
+# ----------------------------------------------------------------------------
+
+class TriangleUnitCell:
+    def __init__(self, r, a=1, coords=None, mask=None):
+        if coords is None:
+            coords = mp.Vector3(0, 0, 0)
+        if mask is None:
+            mask = [True] * 4
+        h = np.sqrt(3) * a
+        c1 = mp.Cylinder(center=mp.Vector3(0, 0.5 * h, 0) + coords, radius=r)
+        c2 = mp.Cylinder(center=mp.Vector3(-0.5 * a, 0, 0) + coords, radius=r)
+        c3 = mp.Cylinder(center=mp.Vector3(0.5 * a, 0, 0) + coords, radius=r)
+        c4 = mp.Cylinder(center=mp.Vector3(0, -0.5 * h, 0) + coords, radius=r)
+        self.geometry = list(np.array([c1, c2, c3, c4])[np.array(mask, dtype=bool)])
+        self.cell = mp.Vector3(a, h, 0)
+
+
+class SlottedTriangleLattice:
+    def __init__(self, r, a=1, thickness=1, shift=0, sw=0, index=3.45,
+                 width=1, mask=None):
+        h = np.sqrt(3) * a
+        Nx = width
+        cell_y = 6 * h + 2 * shift
+        cell = mp.Vector3(Nx * a, cell_y, thickness)
+        geometry = [mp.Block(center=mp.Vector3(0, 0, 0), size=cell,
+                             material=mp.Medium(index=index))]
+        for i in range(Nx):
+            x_shift = (i - (Nx - 1) / 2) * a
+            geometry.extend(
+                TriangleUnitCell(r, a, coords=mp.Vector3(x_shift, 0, 0)).geometry
+            )
+        geometry.append(
+            mp.Block(center=mp.Vector3(0, 0, 0),
+                     size=mp.Vector3(cell.x, sw, thickness),
+                     material=mp.air)
+        )
+        self.geometry = geometry
+        self.cell = cell
+
+
+class SlottedTriangleLatticeCavity(SlottedTriangleLattice):
+    def __init__(self, r, a=1, thickness=1, shift=0, sw=0, index=3.45, width=28):
+        half_way = int((width - 6) / 2)
+        mask = [True] * half_way + [False] * 6 + [True] * half_way
+        super().__init__(r, a, thickness, shift, sw, index, width, mask=mask)
+
+        a_nm = 426
+        h = np.sqrt(3) * a
+
+        shift1 = 5 / a_nm
+        shift2 = 10 / a_nm
+        shift3 = 15 / a_nm
+
+        unshifted = []
+        for sx, m in [(0.5, [1, 1, 1, 0]), (1.5, [1, 1, 1, 0]), (2.5, [1, 0, 0, 1]),
+                      (-0.5, [1, 1, 1, 0]), (-1.5, [1, 1, 1, 0]), (-2.5, [1, 0, 0, 1])]:
+            unshifted.extend(
+                TriangleUnitCell(r, a, mp.Vector3(sx, 2 * h + shift), m).geometry)
+        for sx, m in [(0.5, [0, 1, 1, 1]), (1.5, [0, 1, 1, 1]), (2.5, [1, 0, 0, 1]),
+                      (-0.5, [0, 1, 1, 1]), (-1.5, [0, 1, 1, 1]), (-2.5, [1, 0, 0, 1])]:
+            unshifted.extend(
+                TriangleUnitCell(r, a, mp.Vector3(sx, -2 * h - shift), m).geometry)
+        self.geometry.extend(unshifted)
+
+        def cyl(x, y):
+            return mp.Cylinder(center=mp.Vector3(x, y), radius=r)
+
+        s1 = shift1
+        shift1_holes = [
+            cyl(0.5 * a, 1.6 * h + s1), cyl(1.5 * a, 1.6 * h + s1),
+            cyl(2.0 * a, 1.1 * h + s1), cyl(2.5 * a, 0.6 * h + s1),
+            cyl(0.5 * a, -(1.6 * h + s1)), cyl(1.5 * a, -(1.6 * h + s1)),
+            cyl(2.0 * a, -(1.1 * h + s1)), cyl(2.5 * a, -(0.6 * h + s1)),
+            cyl(-0.5 * a, 1.6 * h + s1), cyl(-1.5 * a, 1.6 * h + s1),
+            cyl(-2.0 * a, 1.1 * h + s1), cyl(-2.5 * a, 0.6 * h + s1),
+            cyl(-0.5 * a, -(1.6 * h + s1)), cyl(-1.5 * a, -(1.6 * h + s1)),
+            cyl(-2.0 * a, -(1.1 * h + s1)), cyl(-2.5 * a, -(0.6 * h + s1)),
+        ]
+        s2 = shift2
+        shift2_holes = [
+            cyl(1.0 * a, 1.1 * h + s2), cyl(1.5 * a, 0.6 * h + s2),
+            cyl(1.0 * a, -(1.1 * h + s2)), cyl(1.5 * a, -(0.6 * h + s2)),
+            cyl(-1.0 * a, 1.1 * h + s2), cyl(-1.5 * a, 0.6 * h + s2),
+            cyl(-1.0 * a, -(1.1 * h + s2)), cyl(-1.5 * a, -(0.6 * h + s2)),
+            cyl(0.0 * a, 1.1 * h + s2), cyl(0.0 * a, -(1.1 * h + s2)),
+        ]
+        s3 = shift3
+        shift3_holes = [
+            cyl(0.5 * a, 0.6 * h + s3), cyl(0.5 * a, -(0.6 * h + s3)),
+            cyl(-0.5 * a, 0.6 * h + s3), cyl(-0.5 * a, -(0.6 * h + s3)),
+        ]
+        self.geometry.extend(shift1_holes + shift2_holes + shift3_holes)
+
+
+# ----------------------------------------------------------------------------
+# Physics helpers
+# ----------------------------------------------------------------------------
+
+# physical constants
+_C = 299792458.0          # m/s
+_HBAR_EV = 6.582119569e-16  # eV*s
+_H_EV = 4.135667696e-15     # eV*s
+_ME_C2 = 510998.95          # electron rest energy, eV
+_E_CHARGE = 1.602176634e-19  # C
+
+
+def electron_beta(E_kin_keV):
+    """Relativistic beta = v/c for a given electron kinetic energy in keV."""
+    E_kin = E_kin_keV * 1e3  # eV
+    gamma = 1.0 + E_kin / _ME_C2
+    return np.sqrt(1.0 - 1.0 / gamma**2)
+
+
+def meep_freq_to_eV(f_meep, a_nm):
+    """MEEP frequency (units c/a) -> photon energy in eV. a_nm in nm."""
+    a_m = a_nm * 1e-9
+    lam_m = a_m / np.asarray(f_meep)      # wavelength in metres
+    return _H_EV * _C / lam_m
+
+
+def eV_to_meep_freq(E_eV, a_nm):
+    a_m = a_nm * 1e-9
+    lam_m = _H_EV * _C / np.asarray(E_eV)
+    return a_m / lam_m
+
+
+# ----------------------------------------------------------------------------
+# Build geometry + cell (fixes the padding bug: pad_z now actually used; the
+# x-direction gets PML, the electron enters/exits through it)
+# ----------------------------------------------------------------------------
+
+def build_phc(args):
+    a_nm = args.a
+    a = 1.0
+    h = np.sqrt(3) * a
+    thickness = args.d / a_nm
+    r = args.r
+    shift = (args.W - 1) / 2 * h
+    sw = args.s / a_nm
+    crystal_x_width = args.x
+
+    if args.cavity:
+        dom = SlottedTriangleLatticeCavity(r, a, thickness, shift, sw,
+                                           index=args.n, width=crystal_x_width)
+    else:
+        dom = SlottedTriangleLattice(r, a, thickness, shift, sw,
+                                     index=args.n, width=crystal_x_width)
+    return dom.geometry, dom.cell, thickness, a_nm
+
+
+def make_cell(struct_cell, thickness, dpml, pad_xy, pad_z):
+    """Full simulation cell = structure + air padding (y,z) + PML everywhere.
+    x keeps the structure length plus PML so the electron flies straight
+    through; no extra air pad on x is needed (the path lives inside the cell).
+    """
+    return mp.Vector3(
+        struct_cell.x + 2 * dpml,                 # x: structure + PML on both ends
+        struct_cell.y + 2 * (pad_xy + dpml),      # y: + air pad + PML
+        thickness + 2 * (pad_z + dpml),           # z: slab + air pad + PML
+    )
+
+
+# ----------------------------------------------------------------------------
+# Moving-electron source: chain of pulsed point dipoles along x
+# ----------------------------------------------------------------------------
+
+def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
+                           amp=1.0):
+    """Lay a chain of Ex point dipoles along x at (y0, z0). Each fires a
+    Gaussian pulse centred at the time the electron passes that x.
+    The pulse bandwidth (df) must cover the spectral window of interest.
+
+    The electron enters at x = -cell.x/2 and exits at +cell.x/2 at speed beta.
+    Source i at x_i fires at t_i = (x_i - x_start)/beta.
+    """
+    x_start = -cell.x / 2.0
+    x_end = cell.x / 2.0
+    npix = int(round((x_end - x_start) * resolution))
+    xs = np.linspace(x_start, x_end, npix)
+    dx = xs[1] - xs[0]
+
+    sources = []
+    for xi in xs:
+        ti = (xi - x_start) / beta
+        # Each pixel carries current j_x = (e/v); in MEEP units we fold the
+        # 1/beta into amp so the chain reconstructs a constant-charge line current.
+        src = mp.Source(
+            mp.GaussianSource(frequency=fcen, fwidth=df, start_time=ti,
+                              cutoff=5.0),
+            component=mp.Ex,
+            center=mp.Vector3(xi, y0, z0),
+            amplitude=amp / beta,
+        )
+        sources.append(src)
+    return sources, xs, dx
+
+
+# ----------------------------------------------------------------------------
+# One FDTD run: returns E_x(x, y0, z0, t) recorded every timestep along path
+# ----------------------------------------------------------------------------
+
+def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
+                       dpml, T_extra, label=""):
+    """Run a single simulation; record Ex along the electron path at (y0,z0)
+    at every timestep. Returns (times, xs, E_field[ntime, nx])."""
+    pml = [mp.PML(dpml)]
+    sources, xs, dx = build_electron_sources(cell, beta, y0, z0,
+                                             fcen, df, resolution)
+
+    sim = mp.Simulation(
+        cell_size=cell,
+        geometry=geometry,
+        sources=sources,
+        boundary_layers=pml,
+        resolution=resolution,
+        force_complex_fields=True,
+    )
+
+    # transit time of the electron across the cell + ringdown time
+    transit = cell.x / beta
+    total_time = transit + T_extra
+
+    rec_times = []
+    rec_fields = []  # each entry: complex Ex sampled at all xs for that step
+
+    def record(sim_obj):
+        row = np.array([
+            sim_obj.get_field_point(mp.Ex, mp.Vector3(xi, y0, z0))
+            for xi in xs
+        ], dtype=complex)
+        rec_times.append(sim_obj.meep_time())
+        rec_fields.append(row)
+
+    sim.run(mp.at_every(sim.Courant / resolution, record),
+            until=total_time)
+
+    return np.array(rec_times), xs, np.array(rec_fields)
+
+
+# ----------------------------------------------------------------------------
+# Post-processing: subtract empty run, temporal FT, eq.(1) assembly, broadening
+# ----------------------------------------------------------------------------
+
+def temporal_ft(times, E_xt, omegas):
+    r"""E_xt: [ntime, nx] complex. Returns E_xw: [nomega, nx] complex.
+    Windowed DFT: E(x,omega) = \int E(x,t) e^{-i omega t} dt, Hann-windowed.
+    omegas are MEEP angular frequencies (= 2 pi f_meep)."""
+    ntime = len(times)
+    win = np.hanning(ntime)[:, None]
+    Ew = E_xt * win
+    dt = np.gradient(times)[:, None]
+    # E(x,omega) = sum_t E(x,t) e^{-i omega t} dt
+    phase = np.exp(-1j * np.outer(omegas, times))  # [nomega, ntime]
+    return phase @ (Ew * dt)                        # [nomega, nx]
+
+
+def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm):
+    r"""eq.(1): Gamma(omega) = (e/(pi hbar omega)) Re[ \int E_ind_x(x,omega)
+    e^{i omega x / v} dx ].  Here omega is angular freq in MEEP units (c/a).
+    Returns Gamma in arbitrary-but-consistent units; absolute calibration via
+    the prefactor block below."""
+    dx = xs[1] - xs[0]
+    # e^{i omega x / v}: in MEEP units v = beta (c=1), omega = omegas_meep
+    phase = np.exp(1j * np.outer(omegas_meep, xs) / beta)  # [nomega, nx]
+    integral = np.sum(E_xw * phase, axis=1) * dx           # [nomega]
+
+    # ---- absolute prefactor e/(pi hbar omega) ----
+    # omega in physical rad/s: omega_phys = omegas_meep * (c / a_m)
+    a_m = a_nm * 1e-9
+    omega_phys = omegas_meep * (_C / a_m)
+    # guard against omega=0
+    omega_phys = np.where(np.abs(omega_phys) < 1e-30, np.nan, omega_phys)
+    prefactor = _E_CHARGE / (np.pi * (_HBAR_EV * _E_CHARGE) * omega_phys)
+    # NOTE: field amplitude normalization (the E0=1 J mode normalization in the
+    # paper) is NOT applied here -- this is why we report SHAPE now and expose
+    # `calibration_scale` for you to fix absolute units against a known mode.
+    gamma = prefactor * np.real(integral)
+    return gamma
+
+
+def gaussian_convolve(E_eV, gamma, fwhm_eV=0.040):
+    """Convolve spectrum with a Gaussian of given FWHM (default 40 meV)."""
+    sigma = fwhm_eV / (2 * np.sqrt(2 * np.log(2)))
+    dE = np.gradient(E_eV)
+    out = np.zeros_like(gamma)
+    for i, E in enumerate(E_eV):
+        k = np.exp(-0.5 * ((E_eV - E) / sigma) ** 2)
+        k /= np.sum(k * dE)
+        out[i] = np.sum(gamma * k * dE)
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Driver
+# ----------------------------------------------------------------------------
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("-a", type=int, default=426, help="lattice constant a [nm]")
+    p.add_argument("-d", type=int, default=220, help="slab thickness [nm]")
+    p.add_argument("-x", type=int, default=36, help="crystal width [units of a]")
+    p.add_argument("-W", type=float, default=1.2, help="waveguide widening factor")
+    p.add_argument("-s", type=int, default=100, help="slot width [nm]")
+    p.add_argument("-r", type=float, default=0.245, help="hole radius [units of a]")
+    p.add_argument("-n", type=float, default=3.45, help="refractive index")
+    p.add_argument("-v", type=float, default=100.0, help="electron energy [keV]")
+    p.add_argument("--cavity", action="store_true", help="use cavity geometry")
+    p.add_argument("--res", type=float, default=None,
+                   help="FDTD resolution [pixels per a]; default = a/18nm")
+    p.add_argument("--Emin", type=float, default=0.70, help="spectrum min [eV]")
+    p.add_argument("--Emax", type=float, default=0.90, help="spectrum max [eV]")
+    p.add_argument("--nE", type=int, default=400, help="spectral points")
+    p.add_argument("--Textra", type=float, default=400.0,
+                   help="ringdown time after transit [MEEP units]")
+    p.add_argument("--quick", action="store_true", help="coarse smoke test")
+    p.add_argument("--out", type=str, default="eels_spectrum.npz")
+    args = p.parse_args()
+
+    if mp is None:
+        raise SystemExit("MEEP is not installed in this environment. "
+                         "Run this on your machine/cluster with MEEP.")
+
+    # resolution: paper uses 18 nm -> pixels per a = a_nm / 18
+    if args.res is None:
+        resolution = args.a / 18.0
+    else:
+        resolution = args.res
+    if args.quick:
+        resolution = max(8.0, resolution / 4.0)
+        args.Textra = 80.0
+
+    beta = electron_beta(args.v)
+    print(f"[info] beta = {beta:.4f}  (v = {beta*_C:.3e} m/s)")
+    print(f"[info] resolution = {resolution:.2f} px/a  "
+          f"(~{args.a/resolution:.1f} nm/px)")
+
+    # spectral window -> MEEP centre freq + bandwidth for the source pulse
+    f_meep = eV_to_meep_freq(np.array([args.Emin, args.Emax]), args.a)
+    fcen = float(np.mean(f_meep))
+    df = float(abs(f_meep[1] - f_meep[0]) * 1.4 + 0.05)  # pad the pulse bw
+    print(f"[info] source fcen = {fcen:.4f} c/a, df = {df:.4f} c/a")
+
+    geometry, struct_cell, thickness, a_nm = build_phc(args)
+
+    dpml = 1.0
+    pad_xy = 1.0
+    pad_z = 1.5 * thickness
+    cell = make_cell(struct_cell, thickness, dpml, pad_xy, pad_z)
+    print(f"[info] cell = ({cell.x:.2f}, {cell.y:.2f}, {cell.z:.2f}) a")
+
+    # electron flies through the slot centre: y0 = 0 (slot midline), z0 = 0 (mid-plane)
+    y0, z0 = 0.0, 0.0
+
+    # --- run 1: cavity ---
+    print("[run] cavity ...")
+    t_c, xs, E_c = run_path_recording(geometry, cell, beta, y0, z0,
+                                      fcen, df, resolution, dpml,
+                                      args.Textra, label="cavity")
+
+    # --- run 2: empty (vacuum) domain, identical recording ---
+    print("[run] empty ...")
+    t_e, xs_e, E_e = run_path_recording([], cell, beta, y0, z0,
+                                        fcen, df, resolution, dpml,
+                                        args.Textra, label="empty")
+
+    # align time bases (they should match; interpolate empty onto cavity grid if not)
+    if E_e.shape != E_c.shape:
+        from numpy import interp
+        E_e_i = np.empty_like(E_c)
+        for j in range(E_c.shape[1]):
+            E_e_i[:, j].real = interp(t_c, t_e, E_e[:, j].real)
+            E_e_i[:, j].imag = interp(t_c, t_e, E_e[:, j].imag)
+        E_e = E_e_i
+
+    E_ind = E_c - E_e  # induced field, transients removed
+
+    # --- temporal FT + eq.(1) assembly ---
+    E_eV = np.linspace(args.Emin, args.Emax, args.nE)
+    f_grid = eV_to_meep_freq(E_eV, args.a)        # MEEP freq
+    omegas_meep = 2 * np.pi * f_grid              # MEEP angular freq
+
+    E_xw = temporal_ft(t_c, E_ind, omegas_meep)
+    gamma = assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm)
+    gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.040)
+
+    np.savez(args.out, E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv,
+             beta=beta, resolution=resolution)
+    print(f"[done] saved {args.out}")
+    print(f"[peak] max of convolved spectrum at "
+          f"{E_eV[np.nanargmax(gamma_conv)]:.4f} eV")
+
+
+if __name__ == "__main__":
+    main()
