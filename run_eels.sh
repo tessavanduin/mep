@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=eels_bf
 #SBATCH --partition=compute
-#SBATCH --account=research-eemcs-diam
+#SBATCH --account=innovation
 #SBATCH --time=04:00:00
 #SBATCH --ntasks=16
 #SBATCH --cpus-per-task=1
