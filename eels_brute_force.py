@@ -323,6 +323,34 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
             )])
         step_callback = move_pulse
 
+    elif source_model == "moving-gaussian":
+        # Validated MEEP-community recipe: a single source that MOVES across the
+        # whole path, with a smooth Gaussian SPATIAL profile (finite src_size +
+        # amp_func), driven by an always-on ~DC ContinuousSource. Unlike the
+        # broken moving-pulse (narrow TIME profile -> frozen at center), here the
+        # source genuinely traverses the domain because its position is recomputed
+        # from meep_time() every step, and the spatial Gaussian gives it a smooth
+        # finite extent (avoids single-pixel artefacts). The always-on field is
+        # removed by the empty-domain subtraction, leaving the induced field.
+        src_width = 0.10                      # spatial width of the charge blob (a)
+        src_size = mp.Vector3(1.0, 1.0, 1.0)  # finite source extent
+
+        def src_amplitude(r):
+            rsq = r.dot(r)
+            ssq2 = 2 * src_width * src_width
+            return amp0 * np.exp(-rsq * rsq / ssq2) / np.sqrt(np.pi * ssq2)
+
+        def move_gauss(sim_obj):
+            tnow = sim_obj.meep_time()
+            sim_obj.change_sources([mp.Source(
+                mp.ContinuousSource(frequency=1e-8),
+                component=mp.Ex,
+                center=electron_path(tnow),
+                size=src_size,
+                amp_func=src_amplitude,
+            )])
+        step_callback = move_gauss
+
     elif source_model == "moving-dc":
         # legacy: smooth-envelope moving DC source (kept for comparison only)
         ramp_frac = 0.15
@@ -587,12 +615,13 @@ def main():
                         "Green-tensor method (eels_green.py). A few hundred MEEP "
                         "units is plenty for the broad features.")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
-    p.add_argument("--source-model", choices=["pulse-chain", "moving-pulse", "moving-dc"],
+    p.add_argument("--source-model", choices=["pulse-chain", "moving-pulse", "moving-gaussian", "moving-dc"],
                    default="pulse-chain",
                    help="electron source model. pulse-chain (default, verified): "
-                        "impulsive fixed sources along path. moving-pulse: single "
-                        "moving Gaussian-pulse source (fast+impulsive). moving-dc: "
-                        "legacy moving DC source (does not Pade-fit; debug only).")
+                        "impulsive fixed sources along path. moving-gaussian: single "
+                        "moving spatial-Gaussian source (validated MEEP recipe, fast). "
+                        "moving-pulse: BROKEN (frozen at center, do not use). "
+                        "moving-dc: legacy (does not Pade-fit; debug only).")
     p.add_argument("--pade", action="store_true",
                    help="use Pade-approximant temporal transform (paper's method) "
                         "instead of the windowed DFT")

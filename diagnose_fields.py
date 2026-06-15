@@ -18,6 +18,29 @@ xs = f["xs"]
 E = f["E_ind"]          # [ntime, nx] complex
 beta = float(f["beta"])
 
+# if raw cavity/empty fields are present, show them too (subtraction check)
+has_raw = "E_cavity" in f and "E_empty" in f
+if has_raw:
+    E_cav = f["E_cavity"]
+    E_emp = f["E_empty"]
+    ic0 = E.shape[1] // 2
+    figR, axR = plt.subplots(2, 1, figsize=(9, 7))
+    axR[0].plot(t, E_cav[:, ic0].real, lw=0.8, label="cavity")
+    axR[0].plot(t, E_emp[:, ic0].real, lw=0.8, label="empty")
+    axR[0].plot(t, E[:, ic0].real, lw=1.0, label="induced (cav-empty)")
+    axR[0].set_title("Raw cavity vs empty vs induced (center pixel, Re)")
+    axR[0].set_xlabel("time (MEEP units)"); axR[0].legend(); axR[0].grid(alpha=0.3)
+    # if cavity and empty nearly overlap, induced is their small difference;
+    # if they look totally different, either strong scattering or misalignment
+    diff_metric = np.mean(np.abs(E_cav - E_emp)) / (np.mean(np.abs(E_cav)) + 1e-30)
+    axR[1].plot(t, np.abs(E_cav[:, ic0]), lw=0.8, label="|cavity|")
+    axR[1].plot(t, np.abs(E_emp[:, ic0]), lw=0.8, label="|empty|")
+    axR[1].set_title(f"Magnitudes (mean|cav-empty|/mean|cav| = {diff_metric:.2f})")
+    axR[1].set_xlabel("time (MEEP units)"); axR[1].legend(); axR[1].grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("subtraction_check.png", dpi=130)
+    print("saved subtraction_check.png")
+
 _C = 299792458.0
 _H_EV = 4.135667696e-15
 
