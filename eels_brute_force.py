@@ -277,9 +277,29 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
     def electron_path(t):
         return mp.Vector3(x_start + beta * t, y0, z0)
 
-    # current amplitude ~ e/v ; sign/scale folded so assemble_gamma yields abs units.
-    # (kept as a single constant; absolute calibration still pending per earlier notes)
-    amp = 1.0 / beta
+    transit = path_len / beta
+
+    # --- TRANSIENT envelope (Option A) ---------------------------------------
+    # The electron must deposit a transient as it passes and then be GONE, so
+    # the structure rings down freely afterwards. A constant-amplitude moving
+    # source (the previous bug) never turns off and drives the field forever.
+    # Here the current amplitude follows a smooth bump in time: ~0 as the
+    # electron enters, steady through the middle of the path, smoothly back to
+    # ~0 as it exits. Smoothness (no abrupt on/off) avoids spurious ringing
+    # from a hard edge. We use a raised-cosine (Tukey-like) ramp over a
+    # fraction `ramp_frac` of the transit at each end.
+    amp0 = 1.0 / beta             # ~ e/v current weight (abs cal still pending)
+    ramp_frac = 0.15              # fraction of transit spent ramping at each end
+    t_ramp = ramp_frac * transit
+
+    def envelope(t):
+        if t <= 0 or t >= transit:
+            return 0.0
+        if t < t_ramp:
+            return 0.5 * (1 - np.cos(np.pi * t / t_ramp))          # rise
+        if t > transit - t_ramp:
+            return 0.5 * (1 - np.cos(np.pi * (transit - t) / t_ramp))  # fall
+        return 1.0                                                  # plateau
 
     sim = mp.Simulation(
         cell_size=cell,
@@ -290,12 +310,18 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
     )
 
     def move_source(sim_obj):
+        tnow = sim_obj.meep_time()
+        env = envelope(tnow)
+        if env <= 0.0:
+            # electron has left (or not yet entered): no source -> free ringdown
+            sim_obj.change_sources([])
+            return
         sim_obj.change_sources([
             mp.Source(
                 mp.ContinuousSource(frequency=1e-8),  # ~DC moving charge
                 component=mp.Ex,
-                center=electron_path(sim_obj.meep_time()),
-                amplitude=amp,
+                center=electron_path(tnow),
+                amplitude=amp0 * env,
             )
         ])
 
@@ -303,7 +329,6 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
     npix = int(round(path_len * resolution))
     xs = np.linspace(x_start, x_end, npix)
 
-    transit = path_len / beta
     total_time = transit + T_extra
 
     rec_times = []
