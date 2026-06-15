@@ -86,12 +86,20 @@ def stage_harminv(args, geometry, cell, resolution, dpml, fcen, df):
     return modes
 
 
+# SI Fig S3 exact TE slot-mode energies (ground truth for sanity check)
+SI_S3_MODES = [0.775, 0.794, 0.87, 0.887]
+
+
 def print_mode_table(modes, a_nm):
-    print("\n  idx |   f (c/a) |    E (eV) |       Q |   |amp|")
-    print("  ----+-----------+-----------+---------+--------")
+    print("\n  idx |   f (c/a) |    E (eV) |       Q |   |amp| | nearest SI-S3")
+    print("  ----+-----------+-----------+---------+---------+--------------")
     for i, m in enumerate(modes):
+        near = min(SI_S3_MODES, key=lambda s: abs(s - m["E_eV"]))
+        d = abs(near - m["E_eV"])
+        tag = f"{near:.3f} (d={d*1000:.0f} meV)" if d < 0.05 else "-"
         print(f"  {i:3d} | {m['freq']:9.5f} | {m['E_eV']:9.4f} | "
-              f"{m['Q']:7.0f} | {m['amp']:.3e}")
+              f"{m['Q']:7.0f} | {m['amp']:.3e} | {tag}")
+    print("\n  (SI Fig S3 TE slot modes: 0.775, 0.794, 0.87, 0.887 eV)")
     print()
 
 
@@ -324,7 +332,7 @@ def main():
     omegas_meep = 2 * np.pi * eV_to_meep_freq(E_eV, args.a)
     gamma = gamma_eq3(modes_used, caps, omegas_meep, beta, a_nm,
                       args.y0, args.z0)
-    gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.040)
+    gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.030)
 
     np.savez(args.out, E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv,
              modes_used=idx, y0=args.y0, z0=args.z0, beta=beta)
