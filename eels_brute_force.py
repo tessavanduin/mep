@@ -702,9 +702,22 @@ def main():
         E_ind = E_c - E_e  # induced field, transients removed
 
         if args.save_fields:
+            # save the induced field AND the raw cavity/empty fields so the
+            # subtraction itself can be diagnosed (is E_ind tiny vs E_c, E_e?)
             np.savez(args.save_fields, t=t_c, xs=xs, E_ind=E_ind,
+                     E_cavity=E_c, E_empty=E_e,
                      beta=beta, resolution=resolution)
-            print(f"[saved] induced field -> {args.save_fields}")
+            print(f"[saved] induced + raw fields -> {args.save_fields}")
+            # report the relative size of the induced field vs the raw fields:
+            # if E_ind is a tiny noisy residual of two large near-equal fields,
+            # the subtraction is killing the signal.
+            amp_c = np.sqrt(np.mean(np.abs(E_c)**2))
+            amp_e = np.sqrt(np.mean(np.abs(E_e)**2))
+            amp_i = np.sqrt(np.mean(np.abs(E_ind)**2))
+            print(f"[diag] RMS |E_cavity|={amp_c:.4e}  |E_empty|={amp_e:.4e}  "
+                  f"|E_induced|={amp_i:.4e}")
+            print(f"[diag] induced/cavity ratio = {amp_i/amp_c:.4f} "
+                  f"({'OK: induced is a real fraction' if amp_i/amp_c > 0.05 else 'WARN: induced is a tiny residual -> subtraction may be killing signal'})")
             print("[info] FDTD complete. Re-run with --from-fields "
                   f"{args.save_fields} to transform without re-simulating.")
             return
