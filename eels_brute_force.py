@@ -6,6 +6,16 @@ Reproduces the "home-made FDTD" method described in
 "High-Efficiency Coupling of Free Electrons to Sub-lambda^3 Modal Volume,
 High-Q Photonic Cavities" -- using MEEP as the FDTD engine.
 
+WHAT THIS METHOD TARGETS:
+  The brute-force moving-source spectrum reproduces the BROAD slot-mode and
+  band features of the experimental spectrum (the alpha ~0.7, beta ~0.81,
+  gamma ~0.95 eV peaks of Fig. 3a). It does NOT resolve the sharp cavity mode:
+  the paper's cavity has Q = 2.5e5, a ~few-microeV linewidth that is (a) below
+  the 30 meV experimental resolution and (b) impossible to ring down in FDTD.
+  The sharp cavity line is the job of the Green-tensor method (eels_green.py,
+  eq. 3), where the complex resonant frequency omega_k is an INPUT, not
+  something extracted by waiting out the time-domain decay.
+
 Method (per the paper's Methods section):
   1. Model the 100 keV electron as a single FDTD-pixel current source that
      translates along x at velocity v = beta*c. In practice MEEP has no
@@ -23,7 +33,7 @@ Method (per the paper's Methods section):
      scipy-based Pade as an opt-in).
   5. Assemble the eq.(1) integral along x:
         Gamma(omega) = (e / (pi hbar omega)) * Re[ \int E_ind_x(x,y0,z0,omega) e^{i omega x / v} dx ]
-  6. Convolve with a 40 meV Gaussian for experimental broadening.
+  6. Convolve with a 30 meV Gaussian (paper Methods: 30 meV FWHM) for experimental broadening.
 
 Units: MEEP dimensionless units with a = a_nm (lattice constant) = 1, c = 1.
        Frequencies are in units of c/a. To convert MEEP freq f -> photon energy:
@@ -212,13 +222,11 @@ def make_cell(struct_cell, thickness, dpml, pad_xy, pad_z):
 
 def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
                            amp=1.0):
-    """Lay a chain of Ex point dipoles along x at (y0, z0). Each fires a
-    Gaussian pulse centred at the time the electron passes that x.
-    The pulse bandwidth (df) must cover the spectral window of interest.
-
-    The electron enters at x = -cell.x/2 and exits at +cell.x/2 at speed beta.
-    Source i at x_i fires at t_i = (x_i - x_start)/beta.
-    """
+    """[LEGACY] Lay a chain of Ex point dipoles along x at (y0, z0). Kept for
+    reference / comparison. The default path now uses a single moving DC
+    ContinuousSource (see run_path_recording), which is broadband by nature
+    and avoids pulse-bandwidth tuning. This function is no longer called by the
+    driver but retained so the pulse-chain method can be A/B tested."""
     x_start = -cell.x / 2.0
     x_end = cell.x / 2.0
     npix = int(round((x_end - x_start) * resolution))
@@ -228,8 +236,6 @@ def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
     sources = []
     for xi in xs:
         ti = (xi - x_start) / beta
-        # Each pixel carries current j_x = (e/v); in MEEP units we fold the
-        # 1/beta into amp so the chain reconstructs a constant-charge line current.
         src = mp.Source(
             mp.GaussianSource(frequency=fcen, fwidth=df, start_time=ti,
                               cutoff=5.0),
@@ -242,45 +248,86 @@ def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
 
 
 # ----------------------------------------------------------------------------
-# One FDTD run: returns E_x(x, y0, z0, t) recorded every timestep along path
+# One FDTD run: moving DC source (the electron) + fast field recording along path
 # ----------------------------------------------------------------------------
 
 def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
                        dpml, T_extra, label=""):
-    """Run a single simulation; record Ex along the electron path at (y0,z0)
-    at every timestep. Returns (times, xs, E_field[ntime, nx])."""
+    """Run a single simulation with a MOVING point current (the electron) and
+    record Ex along its straight path at (y0,z0) every timestep.
+
+    Electron model (adapted from the student's approach, with paper-correct
+    current normalization): a single Ex ContinuousSource at ~zero frequency
+    (a moving DC charge -- broadband by nature, no pulse-bandwidth tuning),
+    relocated each timestep via change_sources to follow electron_path(t).
+    The current amplitude carries the (e/v) weighting of j_x = (e/v) delta(path)
+    so the eq.(1) prefactor assembles to absolute units.
+
+    Returns (times, xs, E_field[ntime, nx]) with Ex sampled on the path pixels.
+    fcen/df are accepted for signature compatibility but unused here (the moving
+    DC source needs no spectral window).
+    """
     pml = [mp.PML(dpml)]
-    sources, xs, dx = build_electron_sources(cell, beta, y0, z0,
-                                             fcen, df, resolution)
+
+    # electron path: enter just inside one PML, exit just inside the other
+    x_start = -cell.x / 2.0 + dpml
+    x_end = cell.x / 2.0 - dpml
+    path_len = x_end - x_start
+
+    def electron_path(t):
+        return mp.Vector3(x_start + beta * t, y0, z0)
+
+    # current amplitude ~ e/v ; sign/scale folded so assemble_gamma yields abs units.
+    # (kept as a single constant; absolute calibration still pending per earlier notes)
+    amp = 1.0 / beta
 
     sim = mp.Simulation(
         cell_size=cell,
         geometry=geometry,
-        sources=sources,
         boundary_layers=pml,
         resolution=resolution,
         force_complex_fields=True,
     )
 
-    # transit time of the electron across the cell + ringdown time
-    transit = cell.x / beta
+    def move_source(sim_obj):
+        sim_obj.change_sources([
+            mp.Source(
+                mp.ContinuousSource(frequency=1e-8),  # ~DC moving charge
+                component=mp.Ex,
+                center=electron_path(sim_obj.meep_time()),
+                amplitude=amp,
+            )
+        ])
+
+    # path pixels to sample
+    npix = int(round(path_len * resolution))
+    xs = np.linspace(x_start, x_end, npix)
+
+    transit = path_len / beta
     total_time = transit + T_extra
 
     rec_times = []
-    rec_fields = []  # each entry: complex Ex sampled at all xs for that step
+    rec_fields = []
+
+    # Fast recording: pull the whole Ex line in ONE get_array call per step
+    # (vs. one get_field_point per pixel). This is the student's speed insight.
+    line_vol = mp.Volume(center=mp.Vector3(0.5 * (x_start + x_end), y0, z0),
+                         size=mp.Vector3(path_len, 0, 0))
 
     def record(sim_obj):
-        row = np.array([
-            sim_obj.get_field_point(mp.Ex, mp.Vector3(xi, y0, z0))
-            for xi in xs
-        ], dtype=complex)
+        ex_line = sim_obj.get_array(mp.Ex, vol=line_vol)
         rec_times.append(sim_obj.meep_time())
-        rec_fields.append(row)
+        rec_fields.append(np.asarray(ex_line, dtype=complex))
 
-    sim.run(mp.at_every(sim.Courant / resolution, record),
+    sim.run(move_source,
+            mp.at_every(sim.Courant / resolution, record),
             until=total_time)
 
-    return np.array(rec_times), xs, np.array(rec_fields)
+    rec_fields = np.array(rec_fields)
+    # get_array length may differ from npix by a pixel; rebuild xs to match
+    nx_actual = rec_fields.shape[1]
+    xs = np.linspace(x_start, x_end, nx_actual)
+    return np.array(rec_times), xs, rec_fields
 
 
 # ----------------------------------------------------------------------------
@@ -378,6 +425,32 @@ def temporal_ft_pade(times, E_xt, omegas, M=None):
     return out
 
 
+def temporal_ft_pade_scipy(times, E_xt, omegas, M=None):
+    r"""Padé transform using scipy.interpolate.pade (the student's pade3.py
+    approach). Builds the [L/M] Padé approximant of the time series treated as
+    a power series in z^{-1}=exp(-i omega dt), then evaluates P/Q on the unit
+    circle. Simpler and closer to what the paper describes; can be less robust
+    to noise than the Prony/lstsq variant. Same signature/return as temporal_ft.
+    """
+    from scipy.interpolate import pade as _scipy_pade
+    times = np.asarray(times)
+    dt = times[1] - times[0]
+    ntime, nx = E_xt.shape
+    out = np.empty((len(omegas), nx), dtype=complex)
+    zinv = np.exp(-1j * omegas * dt)
+    order = M if M is not None else int((ntime - 1) / 2)
+    for j in range(nx):
+        sig = E_xt[:, j].astype(np.complex128)
+        try:
+            P, Q = _scipy_pade(sig, order)
+            out[:, j] = (P(zinv) / Q(zinv)) * dt
+        except Exception:
+            # fall back to DFT for an ill-conditioned pixel
+            phase = np.exp(-1j * np.outer(omegas, np.arange(ntime) * dt))
+            out[:, j] = phase @ (sig * dt)
+    return out
+
+
 def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm):
     r"""eq.(1): Gamma(omega) = (e/(pi hbar omega)) Re[ \int E_ind_x(x,omega)
     e^{i omega x / v} dx ].  Here omega is angular freq in MEEP units (c/a).
@@ -402,8 +475,8 @@ def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm):
     return gamma
 
 
-def gaussian_convolve(E_eV, gamma, fwhm_eV=0.040):
-    """Convolve spectrum with a Gaussian of given FWHM (default 40 meV)."""
+def gaussian_convolve(E_eV, gamma, fwhm_eV=0.030):
+    """Convolve spectrum with a Gaussian of given FWHM (default 30 meV, per paper)."""
     sigma = fwhm_eV / (2 * np.sqrt(2 * np.log(2)))
     dE = np.gradient(E_eV)
     out = np.zeros_like(gamma)
@@ -431,9 +504,10 @@ def main():
     p.add_argument("--cavity", action="store_true", help="use cavity geometry")
     p.add_argument("--res", type=float, default=None,
                    help="FDTD resolution [pixels per a]; default = a/18nm")
-    p.add_argument("--Emin", type=float, default=0.70, help="spectrum min [eV]")
-    p.add_argument("--Emax", type=float, default=0.90, help="spectrum max [eV]")
-    p.add_argument("--nE", type=int, default=400, help="spectral points")
+    p.add_argument("--Emin", type=float, default=0.40, help="spectrum min [eV] "
+                   "(default 0.4: covers the alpha/beta/gamma slot-mode region)")
+    p.add_argument("--Emax", type=float, default=1.00, help="spectrum max [eV]")
+    p.add_argument("--nE", type=int, default=600, help="spectral points")
     p.add_argument("--src-Emin", type=float, default=None,
                    help="source band minimum [eV]; default = --Emin. Set wider "
                         "(e.g. 0) to deposit energy across a broad range.")
@@ -447,13 +521,23 @@ def main():
                    help="skip FDTD; load a previously --save-fields file and only "
                         "run the (cheap) transform + assembly + broadening")
     p.add_argument("--Textra", type=float, default=400.0,
-                   help="ringdown time after transit [MEEP units]")
+                   help="ringdown time after transit [MEEP units]. NOTE: this "
+                        "captures the BROAD slot/band modes (alpha/beta/gamma), "
+                        "which is what brute-force EELS reproduces. Do NOT try to "
+                        "ring down the Q=2.5e5 cavity mode here -- that is "
+                        "physically impossible in FDTD and is the job of the "
+                        "Green-tensor method (eels_green.py). A few hundred MEEP "
+                        "units is plenty for the broad features.")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
     p.add_argument("--pade", action="store_true",
                    help="use Pade-approximant temporal transform (paper's method) "
                         "instead of the windowed DFT")
     p.add_argument("--pade-order", type=int, default=None,
                    help="Pade denominator order M (number of poles); default N//2 capped")
+    p.add_argument("--pade-method", choices=["prony", "scipy"], default="prony",
+                   help="prony = hand-rolled lstsq solver (robust to noise); "
+                        "scipy = scipy.interpolate.pade (the student's pade3.py, "
+                        "simpler, closer to paper). Compare both on real data.")
     p.add_argument("--out", type=str, default="eels_spectrum.npz")
     args = p.parse_args()
 
@@ -569,12 +653,16 @@ def main():
     f_grid = eV_to_meep_freq(E_eV, args.a)        # MEEP freq
     omegas_meep = 2 * np.pi * f_grid              # MEEP angular freq
 
-    E_xw = temporal_ft(t_c, E_ind, omegas_meep) if not args.pade \
-        else temporal_ft_pade(t_c, E_ind, omegas_meep, M=args.pade_order)
-    if args.pade:
-        print("[info] using Pade-approximant temporal transform")
+    if not args.pade:
+        E_xw = temporal_ft(t_c, E_ind, omegas_meep)
+    elif args.pade_method == "scipy":
+        E_xw = temporal_ft_pade_scipy(t_c, E_ind, omegas_meep, M=args.pade_order)
+        print("[info] using Pade transform (scipy.interpolate.pade)")
+    else:
+        E_xw = temporal_ft_pade(t_c, E_ind, omegas_meep, M=args.pade_order)
+        print("[info] using Pade transform (Prony/lstsq)")
     gamma = assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm)
-    gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.040)
+    gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.030)
 
     np.savez(args.out, E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv,
              beta=beta, resolution=resolution)
