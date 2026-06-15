@@ -294,7 +294,11 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
         def src_amplitude(r):
             rsq = r.dot(r)
             ssq2 = 2 * src_width * src_width
-            return amp0 * np.exp(-rsq * rsq / ssq2) / np.sqrt(np.pi * ssq2)
+            # true Gaussian exp(-r^2 / 2 sigma^2); rsq is already r^2, so do NOT
+            # square it again (an earlier version had exp(-rsq*rsq/...) = e^{-r^4},
+            # a flat-topped box-like profile whose sinc spatial spectrum injected
+            # a regular ripple into the assembled spectrum).
+            return amp0 * np.exp(-rsq / ssq2) / np.sqrt(np.pi * ssq2)
 
         def move_gauss(sim_obj):
             tnow = sim_obj.meep_time()
