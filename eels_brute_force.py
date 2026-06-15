@@ -17,23 +17,27 @@ WHAT THIS METHOD TARGETS:
   something extracted by waiting out the time-domain decay.
 
 Method (per the paper's Methods section):
-  1. Model the 100 keV electron as a single FDTD-pixel current source that
-     translates along x at velocity v = beta*c. In practice MEEP has no
-     translating source, so we lay down a CHAIN of point dipole sources along
-     the path, each firing a short pulse centred at t_i = (x_i - x_start)/v.
-     Summed, they reconstruct a moving line charge j_x = (e/v) delta(y-y0)
-     delta(z-z0) delta(x - v t).
+  1. Model the 100 keV electron as a moving current source along x at v=beta*c.
+     Two source models are available (--source-model):
+       moving-gaussian (default): a single source with a smooth spatial-Gaussian
+         profile, repositioned every timestep to follow the electron. Always-on
+         direct field is removed by the empty-domain subtraction. Verified clean.
+       pulse-chain: a line of fixed Gaussian-pulse sources, each fired as the
+         electron passes. Also verified, but ~850 sources so slower.
   2. Run the SAME simulation twice: once with the cavity, once in an empty
-     (homogeneous, here vacuum) domain. Record E_x(x, y0, z0, t) at every
-     timestep along the whole path in both runs.
-  3. Subtract: E_ind = E_cavity - E_empty  (removes entrance/exit transients).
-  4. Per spatial pixel along x, temporal Fourier transform E_ind(x, t) -> E_ind(x, omega).
-     The paper uses a Pade approximant; we provide a windowed DFT by default and
-     an optional Pade accelerator (Harminv-style is overkill here; we expose a
-     scipy-based Pade as an opt-in).
+     (vacuum) domain. Record E_x(x, y0, z0, t) every timestep along the path.
+  3. Subtract: E_ind = E_cavity - E_empty (removes the direct electron field).
+  4. Per spatial pixel, temporal Fourier transform E_ind(x,t) -> E_ind(x,omega),
+     via windowed DFT or Pade (--pade, --pade-method prony|scipy).
   5. Assemble the eq.(1) integral along x:
-        Gamma(omega) = (e / (pi hbar omega)) * Re[ \int E_ind_x(x,y0,z0,omega) e^{i omega x / v} dx ]
-  6. Convolve with a 30 meV Gaussian (paper Methods: 30 meV FWHM) for experimental broadening.
+        Gamma(omega) = (e/(pi hbar omega)) Re[ \int E_ind_x(x,omega) e^{i omega x/v} dx ]
+     Optional --spatial-taper suppresses finite-path sinc ripple when the
+     induced field is nonzero at the path ends.
+  6. Convolve with a 30 meV Gaussian (paper Methods: 30 meV FWHM).
+
+Split workflow: --save-fields runs only the (expensive) FDTD and stores the
+  induced + raw fields; --from-fields re-runs only the (cheap) transform, so
+  windows / Pade orders / tapers can be retuned without re-simulating.
 
 Units: MEEP dimensionless units with a = a_nm (lattice constant) = 1, c = 1.
        Frequencies are in units of c/a. To convert MEEP freq f -> photon energy:
@@ -220,35 +224,8 @@ def make_cell(struct_cell, thickness, dpml, pad_xy, pad_z):
 # Moving-electron source: chain of pulsed point dipoles along x
 # ----------------------------------------------------------------------------
 
-def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
-                           amp=1.0):
-    """[LEGACY] Lay a chain of Ex point dipoles along x at (y0, z0). Kept for
-    reference / comparison. The default path now uses a single moving DC
-    ContinuousSource (see run_path_recording), which is broadband by nature
-    and avoids pulse-bandwidth tuning. This function is no longer called by the
-    driver but retained so the pulse-chain method can be A/B tested."""
-    x_start = -cell.x / 2.0
-    x_end = cell.x / 2.0
-    npix = int(round((x_end - x_start) * resolution))
-    xs = np.linspace(x_start, x_end, npix)
-    dx = xs[1] - xs[0]
-
-    sources = []
-    for xi in xs:
-        ti = (xi - x_start) / beta
-        src = mp.Source(
-            mp.GaussianSource(frequency=fcen, fwidth=df, start_time=ti,
-                              cutoff=5.0),
-            component=mp.Ex,
-            center=mp.Vector3(xi, y0, z0),
-            amplitude=amp / beta,
-        )
-        sources.append(src)
-    return sources, xs, dx
-
-
 # ----------------------------------------------------------------------------
-# One FDTD run: moving DC source (the electron) + fast field recording along path
+# One FDTD run: moving/impulsive electron source + fast field recording on path
 # ----------------------------------------------------------------------------
 
 def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
@@ -302,36 +279,15 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
                 amplitude=amp0,
             ))
 
-    elif source_model == "moving-pulse":
-        # one source that MOVES, with a narrow Gaussian time profile centred at
-        # mid-transit. Impulsive (broadband, transient) but a single source.
-        t_mid = 0.5 * transit
-        # pulse width: a few periods of the centre frequency, but short vs transit
-        sigma_t = min(0.1 * transit, 2.0 / (2 * np.pi * fcen))
-
-        def move_pulse(sim_obj):
-            tnow = sim_obj.meep_time()
-            g = np.exp(-0.5 * ((tnow - t_mid) / sigma_t) ** 2)
-            if g < 1e-4:
-                sim_obj.change_sources([])
-                return
-            sim_obj.change_sources([mp.Source(
-                mp.ContinuousSource(frequency=fcen),
-                component=mp.Ex,
-                center=electron_path(tnow),
-                amplitude=amp0 * g,
-            )])
-        step_callback = move_pulse
-
     elif source_model == "moving-gaussian":
         # Validated MEEP-community recipe: a single source that MOVES across the
         # whole path, with a smooth Gaussian SPATIAL profile (finite src_size +
-        # amp_func), driven by an always-on ~DC ContinuousSource. Unlike the
-        # broken moving-pulse (narrow TIME profile -> frozen at center), here the
-        # source genuinely traverses the domain because its position is recomputed
-        # from meep_time() every step, and the spatial Gaussian gives it a smooth
-        # finite extent (avoids single-pixel artefacts). The always-on field is
-        # removed by the empty-domain subtraction, leaving the induced field.
+        # amp_func), driven by an always-on ~DC ContinuousSource. The source
+        # genuinely traverses the domain because its position is recomputed from
+        # meep_time() every step; the spatial Gaussian gives it a smooth finite
+        # extent. The always-on direct field is removed by the empty-domain
+        # subtraction, leaving the induced field. Verified to give a clean,
+        # properly-subtracted, moving field.
         src_width = 0.10                      # spatial width of the charge blob (a)
         src_size = mp.Vector3(1.0, 1.0, 1.0)  # finite source extent
 
@@ -351,35 +307,9 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
             )])
         step_callback = move_gauss
 
-    elif source_model == "moving-dc":
-        # legacy: smooth-envelope moving DC source (kept for comparison only)
-        ramp_frac = 0.15
-        t_ramp = ramp_frac * transit
-
-        def envelope(t):
-            if t <= 0 or t >= transit:
-                return 0.0
-            if t < t_ramp:
-                return 0.5 * (1 - np.cos(np.pi * t / t_ramp))
-            if t > transit - t_ramp:
-                return 0.5 * (1 - np.cos(np.pi * (transit - t) / t_ramp))
-            return 1.0
-
-        def move_dc(sim_obj):
-            tnow = sim_obj.meep_time()
-            env = envelope(tnow)
-            if env <= 0.0:
-                sim_obj.change_sources([])
-                return
-            sim_obj.change_sources([mp.Source(
-                mp.ContinuousSource(frequency=1e-8),
-                component=mp.Ex,
-                center=electron_path(tnow),
-                amplitude=amp0 * env,
-            )])
-        step_callback = move_dc
     else:
-        raise ValueError(f"unknown source_model: {source_model}")
+        raise ValueError(f"unknown source_model: {source_model} "
+                         "(use 'pulse-chain' or 'moving-gaussian')")
 
     sim = mp.Simulation(
         cell_size=cell,
@@ -537,26 +467,41 @@ def temporal_ft_pade_scipy(times, E_xt, omegas, M=None):
     return out
 
 
-def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm):
+def assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm, spatial_taper=0.0):
     r"""eq.(1): Gamma(omega) = (e/(pi hbar omega)) Re[ \int E_ind_x(x,omega)
     e^{i omega x / v} dx ].  Here omega is angular freq in MEEP units (c/a).
+
+    spatial_taper (0..1): fraction of the path over which to taper the field to
+    zero at EACH end (Tukey window) before the x-integral. The integral has a
+    hard cutoff at the path ends; if the induced field is nonzero there (e.g. an
+    entrance-edge artifact), that hard cutoff produces a finite-length sinc
+    ripple of period ~ h*v/L that swamps the real modes. Tapering the ends
+    removes it (same idea as the Hann window in the temporal FT). 0 = no taper.
+
     Returns Gamma in arbitrary-but-consistent units; absolute calibration via
     the prefactor block below."""
     dx = xs[1] - xs[0]
+    nx = len(xs)
+
+    # optional Tukey spatial window: flat in the middle, cosine taper at ends
+    if spatial_taper and spatial_taper > 0:
+        w = np.ones(nx)
+        ntap = int(spatial_taper * nx)
+        if ntap > 1:
+            ramp = 0.5 * (1 - np.cos(np.pi * np.arange(ntap) / ntap))
+            w[:ntap] = ramp
+            w[-ntap:] = ramp[::-1]
+        E_xw = E_xw * w[None, :]
+
     # e^{i omega x / v}: in MEEP units v = beta (c=1), omega = omegas_meep
     phase = np.exp(1j * np.outer(omegas_meep, xs) / beta)  # [nomega, nx]
     integral = np.sum(E_xw * phase, axis=1) * dx           # [nomega]
 
     # ---- absolute prefactor e/(pi hbar omega) ----
-    # omega in physical rad/s: omega_phys = omegas_meep * (c / a_m)
     a_m = a_nm * 1e-9
     omega_phys = omegas_meep * (_C / a_m)
-    # guard against omega=0
     omega_phys = np.where(np.abs(omega_phys) < 1e-30, np.nan, omega_phys)
     prefactor = _E_CHARGE / (np.pi * (_HBAR_EV * _E_CHARGE) * omega_phys)
-    # NOTE: field amplitude normalization (the E0=1 J mode normalization in the
-    # paper) is NOT applied here -- this is why we report SHAPE now and expose
-    # `calibration_scale` for you to fix absolute units against a known mode.
     gamma = prefactor * np.real(integral)
     return gamma
 
@@ -615,13 +560,17 @@ def main():
                         "Green-tensor method (eels_green.py). A few hundred MEEP "
                         "units is plenty for the broad features.")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
-    p.add_argument("--source-model", choices=["pulse-chain", "moving-pulse", "moving-gaussian", "moving-dc"],
-                   default="pulse-chain",
-                   help="electron source model. pulse-chain (default, verified): "
-                        "impulsive fixed sources along path. moving-gaussian: single "
-                        "moving spatial-Gaussian source (validated MEEP recipe, fast). "
-                        "moving-pulse: BROKEN (frozen at center, do not use). "
-                        "moving-dc: legacy (does not Pade-fit; debug only).")
+    p.add_argument("--spatial-taper", type=float, default=0.0,
+                   help="fraction (0..0.5) of the path to taper at each end "
+                        "before the eq.1 x-integral. Suppresses finite-path sinc "
+                        "ripple when the induced field is nonzero at the path ends. "
+                        "Try 0.1-0.2 if the spectrum shows uniform ripple.")
+    p.add_argument("--source-model", choices=["pulse-chain", "moving-gaussian"],
+                   default="moving-gaussian",
+                   help="electron source model. moving-gaussian (default): single "
+                        "moving spatial-Gaussian source (validated, clean field, "
+                        "fast). pulse-chain: impulsive fixed sources along path "
+                        "(also verified, but ~850 sources so slower).")
     p.add_argument("--pade", action="store_true",
                    help="use Pade-approximant temporal transform (paper's method) "
                         "instead of the windowed DFT")
@@ -769,7 +718,8 @@ def main():
     else:
         E_xw = temporal_ft_pade(t_c, E_ind, omegas_meep, M=args.pade_order)
         print("[info] using Pade transform (Prony/lstsq)")
-    gamma = assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm)
+    gamma = assemble_gamma(E_xw, xs, omegas_meep, beta, a_nm,
+                           spatial_taper=args.spatial_taper)
     gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.030)
 
     np.savez(args.out, E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv,
