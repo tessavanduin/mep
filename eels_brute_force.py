@@ -252,20 +252,25 @@ def build_electron_sources(cell, beta, y0, z0, fcen, df, resolution,
 # ----------------------------------------------------------------------------
 
 def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
-                       dpml, T_extra, label=""):
-    """Run a single simulation with a MOVING point current (the electron) and
-    record Ex along its straight path at (y0,z0) every timestep.
+                       dpml, T_extra, label="", source_model="pulse-chain"):
+    """Run a single simulation with the electron as a current source and record
+    Ex along its straight path at (y0,z0) every timestep.
 
-    Electron model (adapted from the student's approach, with paper-correct
-    current normalization): a single Ex ContinuousSource at ~zero frequency
-    (a moving DC charge -- broadband by nature, no pulse-bandwidth tuning),
-    relocated each timestep via change_sources to follow electron_path(t).
-    The current amplitude carries the (e/v) weighting of j_x = (e/v) delta(path)
-    so the eq.(1) prefactor assembles to absolute units.
+    source_model selects how the electron is represented:
+      "pulse-chain" (DEFAULT, verified): a line of fixed Ex sources along the
+          path, each firing a narrow Gaussian pulse timed to when the electron
+          passes. Impulsive + broadband by construction; nothing stays driven,
+          so the structure rings down freely. This is the model whose eq.1+Pade
+          pipeline we validated end-to-end. Needs fcen/df to set pulse bandwidth.
+      "moving-pulse": a SINGLE moving source whose time profile is a narrow
+          Gaussian in the co-moving frame -- impulsive like the chain but only
+          one source (faster). Also needs fcen/df.
+      "moving-dc": a single moving ~DC ContinuousSource with a smooth transient
+          envelope. Fast and tuning-free, BUT in testing this produced an
+          entry/exit-dominated, persistently-driven field that does not Pade-fit
+          (kept for comparison / debugging only -- not recommended).
 
     Returns (times, xs, E_field[ntime, nx]) with Ex sampled on the path pixels.
-    fcen/df are accepted for signature compatibility but unused here (the moving
-    DC source needs no spectral window).
     """
     pml = [mp.PML(dpml)]
 
@@ -273,69 +278,97 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
     x_start = -cell.x / 2.0 + dpml
     x_end = cell.x / 2.0 - dpml
     path_len = x_end - x_start
+    transit = path_len / beta
+    amp0 = 1.0 / beta             # ~ e/v current weight (abs cal still pending)
 
     def electron_path(t):
         return mp.Vector3(x_start + beta * t, y0, z0)
 
-    transit = path_len / beta
+    # ----- build the source(s) according to the chosen model -----
+    static_sources = []
+    step_callback = None
 
-    # --- TRANSIENT envelope (Option A) ---------------------------------------
-    # The electron must deposit a transient as it passes and then be GONE, so
-    # the structure rings down freely afterwards. A constant-amplitude moving
-    # source (the previous bug) never turns off and drives the field forever.
-    # Here the current amplitude follows a smooth bump in time: ~0 as the
-    # electron enters, steady through the middle of the path, smoothly back to
-    # ~0 as it exits. Smoothness (no abrupt on/off) avoids spurious ringing
-    # from a hard edge. We use a raised-cosine (Tukey-like) ramp over a
-    # fraction `ramp_frac` of the transit at each end.
-    amp0 = 1.0 / beta             # ~ e/v current weight (abs cal still pending)
-    ramp_frac = 0.15              # fraction of transit spent ramping at each end
-    t_ramp = ramp_frac * transit
+    if source_model == "pulse-chain":
+        # fixed sources along x, each a Gaussian pulse fired at t_i = x_i/v
+        npix_src = int(round(path_len * resolution))
+        xs_src = np.linspace(x_start, x_end, npix_src)
+        for xi in xs_src:
+            ti = (xi - x_start) / beta
+            static_sources.append(mp.Source(
+                mp.GaussianSource(frequency=fcen, fwidth=df,
+                                  start_time=ti, cutoff=4.0),
+                component=mp.Ex,
+                center=mp.Vector3(xi, y0, z0),
+                amplitude=amp0,
+            ))
 
-    def envelope(t):
-        if t <= 0 or t >= transit:
-            return 0.0
-        if t < t_ramp:
-            return 0.5 * (1 - np.cos(np.pi * t / t_ramp))          # rise
-        if t > transit - t_ramp:
-            return 0.5 * (1 - np.cos(np.pi * (transit - t) / t_ramp))  # fall
-        return 1.0                                                  # plateau
+    elif source_model == "moving-pulse":
+        # one source that MOVES, with a narrow Gaussian time profile centred at
+        # mid-transit. Impulsive (broadband, transient) but a single source.
+        t_mid = 0.5 * transit
+        # pulse width: a few periods of the centre frequency, but short vs transit
+        sigma_t = min(0.1 * transit, 2.0 / (2 * np.pi * fcen))
+
+        def move_pulse(sim_obj):
+            tnow = sim_obj.meep_time()
+            g = np.exp(-0.5 * ((tnow - t_mid) / sigma_t) ** 2)
+            if g < 1e-4:
+                sim_obj.change_sources([])
+                return
+            sim_obj.change_sources([mp.Source(
+                mp.ContinuousSource(frequency=fcen),
+                component=mp.Ex,
+                center=electron_path(tnow),
+                amplitude=amp0 * g,
+            )])
+        step_callback = move_pulse
+
+    elif source_model == "moving-dc":
+        # legacy: smooth-envelope moving DC source (kept for comparison only)
+        ramp_frac = 0.15
+        t_ramp = ramp_frac * transit
+
+        def envelope(t):
+            if t <= 0 or t >= transit:
+                return 0.0
+            if t < t_ramp:
+                return 0.5 * (1 - np.cos(np.pi * t / t_ramp))
+            if t > transit - t_ramp:
+                return 0.5 * (1 - np.cos(np.pi * (transit - t) / t_ramp))
+            return 1.0
+
+        def move_dc(sim_obj):
+            tnow = sim_obj.meep_time()
+            env = envelope(tnow)
+            if env <= 0.0:
+                sim_obj.change_sources([])
+                return
+            sim_obj.change_sources([mp.Source(
+                mp.ContinuousSource(frequency=1e-8),
+                component=mp.Ex,
+                center=electron_path(tnow),
+                amplitude=amp0 * env,
+            )])
+        step_callback = move_dc
+    else:
+        raise ValueError(f"unknown source_model: {source_model}")
 
     sim = mp.Simulation(
         cell_size=cell,
         geometry=geometry,
+        sources=static_sources,        # empty for moving models
         boundary_layers=pml,
         resolution=resolution,
         force_complex_fields=True,
     )
 
-    def move_source(sim_obj):
-        tnow = sim_obj.meep_time()
-        env = envelope(tnow)
-        if env <= 0.0:
-            # electron has left (or not yet entered): no source -> free ringdown
-            sim_obj.change_sources([])
-            return
-        sim_obj.change_sources([
-            mp.Source(
-                mp.ContinuousSource(frequency=1e-8),  # ~DC moving charge
-                component=mp.Ex,
-                center=electron_path(tnow),
-                amplitude=amp0 * env,
-            )
-        ])
-
     # path pixels to sample
     npix = int(round(path_len * resolution))
     xs = np.linspace(x_start, x_end, npix)
-
     total_time = transit + T_extra
 
     rec_times = []
     rec_fields = []
-
-    # Fast recording: pull the whole Ex line in ONE get_array call per step
-    # (vs. one get_field_point per pixel). This is the student's speed insight.
     line_vol = mp.Volume(center=mp.Vector3(0.5 * (x_start + x_end), y0, z0),
                          size=mp.Vector3(path_len, 0, 0))
 
@@ -344,12 +377,12 @@ def run_path_recording(geometry, cell, beta, y0, z0, fcen, df, resolution,
         rec_times.append(sim_obj.meep_time())
         rec_fields.append(np.asarray(ex_line, dtype=complex))
 
-    sim.run(move_source,
-            mp.at_every(sim.Courant / resolution, record),
-            until=total_time)
+    run_args = [mp.at_every(sim.Courant / resolution, record)]
+    if step_callback is not None:
+        run_args = [step_callback] + run_args
+    sim.run(*run_args, until=total_time)
 
     rec_fields = np.array(rec_fields)
-    # get_array length may differ from npix by a pixel; rebuild xs to match
     nx_actual = rec_fields.shape[1]
     xs = np.linspace(x_start, x_end, nx_actual)
     return np.array(rec_times), xs, rec_fields
@@ -554,6 +587,12 @@ def main():
                         "Green-tensor method (eels_green.py). A few hundred MEEP "
                         "units is plenty for the broad features.")
     p.add_argument("--quick", action="store_true", help="coarse smoke test")
+    p.add_argument("--source-model", choices=["pulse-chain", "moving-pulse", "moving-dc"],
+                   default="pulse-chain",
+                   help="electron source model. pulse-chain (default, verified): "
+                        "impulsive fixed sources along path. moving-pulse: single "
+                        "moving Gaussian-pulse source (fast+impulsive). moving-dc: "
+                        "legacy moving DC source (does not Pade-fit; debug only).")
     p.add_argument("--pade", action="store_true",
                    help="use Pade-approximant temporal transform (paper's method) "
                         "instead of the windowed DFT")
@@ -638,16 +677,18 @@ def main():
               f"{E_ind.shape[1]} path pixels")
     else:
         # --- run 1: cavity ---
-        print("[run] cavity ...")
+        print(f"[run] cavity ... (source model: {args.source_model})")
         t_c, xs, E_c = run_path_recording(geometry, cell, beta, y0, z0,
                                           fcen, df, resolution, dpml,
-                                          args.Textra, label="cavity")
+                                          args.Textra, label="cavity",
+                                          source_model=args.source_model)
 
         # --- run 2: empty (vacuum) domain, identical recording ---
         print("[run] empty ...")
         t_e, xs_e, E_e = run_path_recording([], cell, beta, y0, z0,
                                             fcen, df, resolution, dpml,
-                                            args.Textra, label="empty")
+                                            args.Textra, label="empty",
+                                            source_model=args.source_model)
 
         # align time bases (interpolate empty onto cavity grid if needed)
         if E_e.shape != E_c.shape:
