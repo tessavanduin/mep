@@ -11,18 +11,20 @@ Fourier-transforms in time, and evaluates the loss probability Gamma(omega).
 
 Physics fixes relative to the first student version
 ---------------------------------------------------
-1. The electron current source now has its amplitude SET (it was commented out),
-   so the absolute normalisation is meaningful.  See
-   helper_functions.electron_source_amplitude.
+1. The electron current source has its amplitude SET (it was commented out), so
+   the absolute normalisation is meaningful.  By default it is a SMOOTHED
+   finite-size Gaussian source (Meep issue #1118) to suppress the voxel-jump
+   artefacts of a moving point charge; --source-sigma 0 recovers the bare point
+   source.  Either way the source carries exactly one electron.
 2. The field is recorded for the full run, NOT only while the electron is inside
-   the crystal.  High-Q modes ring long after the electron leaves and that
-   ring-down carries the line shape; truncating it destroys the spectrum.
-3. The flux/divergence boxes have been removed from the data path.  They survive
-   only as an OPTIONAL one-off vacuum charge check (`--charge-check`).
+   the crystal.  High-Q modes ring after the electron leaves and that ring-down
+   carries the line shape; truncating it destroys the spectrum.
+3. The flux/divergence boxes are removed from the data path; they survive only
+   as an OPTIONAL one-off vacuum charge check (--charge-check).
 4. Empty and crystal runs use the IDENTICAL source normalisation, so the bare
    electron field cancels exactly in the subtraction.
-5. Geometry of the recording (pixel positions, dt, electron start position) is
-   written into the HDF5 file so the post-processing needs no guessing.
+5. The recording geometry (pixel positions, dt, electron start) is written into
+   the HDF5 file so the post-processing needs no guessing.
 """
 
 import argparse
@@ -34,6 +36,7 @@ from geometries import SlottedTriangleLattice, SlottedTriangleLatticeCavity
 from helper_functions import (
     E_to_speed,
     electron_source_amplitude,
+    gaussian_current_amp_func,
     create_flux_box,
     enclosed_charge,
     Q_E_MEEP,
@@ -100,25 +103,34 @@ def main(args):
     transit_time = electron_path_length / beta
 
     # ---- the electron as a moving J_x current source -----------------------
-    # amplitude is now SET (this is the crucial normalisation fix).
-    amp = electron_source_amplitude(resolution, beta)
+    # By default a SMOOTHED (finite-size Gaussian) source is used to suppress the
+    # voxel-jump artefacts of a moving point charge (Meep issue #1118).  Set
+    # --source-sigma 0 to recover the bare point source (e.g. for convergence
+    # studies).  Either way the source carries exactly one electron, so the
+    # absolute normalisation is preserved -- verify with --charge-check.
+    src_time = mp.ContinuousSource(frequency=1e-7, width=0, is_integrated=True)
+    sigma = args.source_sigma / resolution                # voxels -> units of a
+
+    if sigma > 0:
+        amp_func = gaussian_current_amp_func(sigma, beta)
+        src_size = mp.Vector3(1, 1, 1) * (6 * sigma)      # contain the Gaussian
+    else:
+        amp_func, src_size = None, mp.Vector3()           # point source
+    point_amp = electron_source_amplitude(resolution, beta)
 
     def move_source(sim: mp.Simulation):
         t = sim.meep_time()
         if not in_cell(t):
             sim.change_sources([])                        # switch off after exit
             return
-        sim.change_sources([
-            mp.Source(
-                # near-DC continuous source = a steady current; the broadband
-                # spectral content comes from the MOTION sweeping past each
-                # point, not from the source's own time dependence.
-                mp.ContinuousSource(frequency=1e-7, width=0, is_integrated=True),
-                component=mp.Ex,
-                center=mp.Vector3(electron_x(t), args.y0, args.z0),
-                amplitude=amp,
-            )
-        ])
+        center = mp.Vector3(electron_x(t), args.y0, args.z0)
+        if sigma > 0:
+            src = mp.Source(src_time, component=mp.Ex, center=center,
+                            size=src_size, amp_func=amp_func)
+        else:
+            src = mp.Source(src_time, component=mp.Ex, center=center,
+                            amplitude=point_amp)
+        sim.change_sources([src])
 
     # ---- optional VACUUM charge check (the only legitimate flux-box use) ----
     if args.charge_check:
@@ -128,8 +140,6 @@ def main(args):
         q_log = []
 
         def check_charge(sim):
-            if in_cell(sim.meep_time()):
-                box.surfaces  # noqa  (kept explicit for readability)
             q_log.append(enclosed_charge(sim, box, ds))
 
         sim.run(move_source, mp.at_every(transit_time / 50, check_charge),
@@ -173,6 +183,7 @@ def main(args):
             "a_nm": a_nm, "resolution": resolution, "beta": beta,
             "dt_meep": dt, "start_pos": start_pos, "monitor_width": monitor_width,
             "y0": args.y0, "z0": args.z0, "total_time": total_time,
+            "source_sigma_vox": args.source_sigma,
         }.items():
             f.attrs[key] = val
         f.require_dataset("x_pix_meep", x_pix.shape, dtype="<f8", data=x_pix)
@@ -188,8 +199,11 @@ if __name__ == "__main__":
     p.add_argument("--charge-check", action="store_true",
                    help="Vacuum-only: verify the source injects one electron.")
     p.add_argument("--ringdown-factor", type=float, default=2.0,
-                   help="Extra run time as a multiple of the transit time, to "
-                        "capture mode ring-down.")
+                   help="Extra run time as a multiple of the transit time.")
+    p.add_argument("--source-sigma", type=float, default=1.0,
+                   help="Width of the smoothed electron source, in VOXELS "
+                        "(Meep #1118 artefact suppression). 0 = point source. "
+                        "Keep ~1; must stay << slot width / lattice a.")
     p.add_argument("-a", type=int, default=426)
     p.add_argument("-d", type=int, default=220)
     p.add_argument("-x", type=int, default=36)

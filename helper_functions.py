@@ -78,8 +78,41 @@ def electron_source_amplitude(resolution: float, beta: float) -> float:
 
     NOTE: this is the piece the student had commented out.  Leaving it at the
     default of 1.0 is what destroyed the absolute normalisation.
+
+    This is the POINT-source amplitude; it is the sigma->0 limit of the smoothed
+    source below (G(0) -> resolution^3).  A bare point source jumps voxel-to-voxel
+    and injects broadband artefacts near the Nyquist frequency (Meep issue #1118);
+    prefer `gaussian_current_amp_func` for production runs.
     """
     return -Q_E_MEEP * resolution**3 * beta
+
+
+def gaussian_current_amp_func(sigma: float, beta: float, q_meep: float = Q_E_MEEP):
+    """Smoothed moving-electron source (Meep issue #1118, seewhydee's workaround).
+
+    Returns an `amp_func(r)` giving the current density J_x of a charge whose
+    density is a NORMALISED 3-D Gaussian of width `sigma` (in units of a):
+
+        rho(r) = q · G(r),   G(r) = exp(-r^2/2 sigma^2)/(2 pi sigma^2)^{3/2},  ∫G dV = 1
+        J_x(r) = rho(r) · v = q · beta · G(r)
+
+    Because ∫rho dV = q exactly, the source still carries one electron, so the
+    absolute normalisation (and the 4·alpha prefactor) is unchanged -- the only
+    effect is to spatially average away the grid-scale motion artefacts.
+
+    Keep `sigma` ~ 1 voxel (= 1/resolution): small against the slot width and
+    lattice period so the coupling to the slot mode is not washed out, but large
+    enough to smooth the pixelated motion.  Pair with a source `size` >= 6·sigma
+    so the Gaussian is well contained.  Always confirm the injected charge with a
+    vacuum `--charge-check`.
+    """
+    norm = -q_meep * beta / (2 * np.pi * sigma**2) ** 1.5
+    inv2s2 = 1.0 / (2 * sigma**2)
+
+    def amp(r):
+        return norm * np.exp(-(r.x * r.x + r.y * r.y + r.z * r.z) * inv2s2)
+
+    return amp
 
 
 def gamma_si_prefactor(omega_si: np.ndarray) -> np.ndarray:
