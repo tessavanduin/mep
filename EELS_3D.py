@@ -79,10 +79,16 @@ def main(args):
     if args.empty:
         geometry = None
 
+    # Mirror symmetry across the slot (y=0) and the slab mid-plane (z=0): the
+    # structure is symmetric under both, and the on-axis Ex electron source is
+    # EVEN under both, so this is exact -- ~4x less compute and memory.  Disable
+    # with --no-symmetry for debugging / convergence cross-checks.
+    symmetries = [] if args.no_symmetry else [mp.Mirror(mp.Y), mp.Mirror(mp.Z)]
+
     sim = mp.Simulation(cell_size=cell,
                         geometry=geometry,
                         boundary_layers=pml_layers,
-                        symmetries=None,
+                        symmetries=symmetries,
                         resolution=resolution)
 
     if args.plot:
@@ -178,15 +184,20 @@ def main(args):
     npix = int(round(monitor_width * resolution)) + 1
     x_pix = np.linspace(-monitor_width / 2, monitor_width / 2, npix)  # MEEP units
 
-    with h5py.File(f"EELS_3D-out/EELS_3D-{fname}.h5", "r+") as f:
-        for key, val in {
-            "a_nm": a_nm, "resolution": resolution, "beta": beta,
-            "dt_meep": dt, "start_pos": start_pos, "monitor_width": monitor_width,
-            "y0": args.y0, "z0": args.z0, "total_time": total_time,
-            "source_sigma_vox": args.source_sigma,
-        }.items():
-            f.attrs[key] = val
-        f.require_dataset("x_pix_meep", x_pix.shape, dtype="<f8", data=x_pix)
+    # IMPORTANT: under MPI only the MASTER rank may open the HDF5 file for
+    # writing -- otherwise every rank grabs the file lock at once and you get
+    # "BlockingIOError: unable to lock file".  (Also export
+    # HDF5_USE_FILE_LOCKING=FALSE on Lustre/GPFS; see run_eels.sh.)
+    if mp.am_master():
+        with h5py.File(f"EELS_3D-out/EELS_3D-{fname}.h5", "r+") as f:
+            for key, val in {
+                "a_nm": a_nm, "resolution": resolution, "beta": beta,
+                "dt_meep": dt, "start_pos": start_pos, "monitor_width": monitor_width,
+                "y0": args.y0, "z0": args.z0, "total_time": total_time,
+                "source_sigma_vox": args.source_sigma,
+            }.items():
+                f.attrs[key] = val
+            f.require_dataset("x_pix_meep", x_pix.shape, dtype="<f8", data=x_pix)
 
 
 if __name__ == "__main__":
@@ -204,6 +215,9 @@ if __name__ == "__main__":
                    help="Width of the smoothed electron source, in VOXELS "
                         "(Meep #1118 artefact suppression). 0 = point source. "
                         "Keep ~1; must stay << slot width / lattice a.")
+    p.add_argument("--no-symmetry", action="store_true",
+                   help="Disable the y/z mirror symmetries (slower; for "
+                        "debugging or convergence cross-checks).")
     p.add_argument("-a", type=int, default=426)
     p.add_argument("-d", type=int, default=220)
     p.add_argument("-x", type=int, default=36)

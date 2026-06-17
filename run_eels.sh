@@ -1,14 +1,39 @@
 #!/bin/bash
-#SBATCH --job-name=eels_bf
-#SBATCH --partition=compute
-#SBATCH --account=innovation
-#SBATCH --time=04:00:00
-#SBATCH --ntasks=16
+#==============================================================================
+# run_eels.sh  --  full free-electron EELS pipeline in one SLURM job.
+#
+#   1. (optional) one-off vacuum charge check
+#   2. vacuum reference run            (--empty)
+#   3. slotted photonic crystal        (parallel geometry, beam in slot centre)
+#   4. width-modulated cavity          (--cavity)
+#   5. post-processing -> spectra (CSV + PNG) in eels-spectra/
+#
+# MEEP is run under MPI (mpirun) so each FDTD job uses all cores on the node.
+#
+# Submit with:   sbatch run_eels.sh
+# Quick local test (no scheduler):   bash run_eels.sh
+#==============================================================================
+
+#--------------------------- SLURM resource request ---------------------------
+# Adjust to your cluster's partitions / limits.  These are sensible defaults
+# for a single fat node; the 3 FDTD runs are done sequentially below, each
+# using all the cores you request here.
+#SBATCH --job-name=eels-phc
+#SBATCH --nodes=1
+#SBATCH --ntasks=32                 # MPI ranks for MEEP (= cores on the node)
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=3900MB
-#SBATCH --output=slurm-%j.out
+#SBATCH --time=24:00:00
+#SBATCH --mem=120G
+#SBATCH --output=eels-%j.out
+#SBATCH --error=eels-%j.err
+# #SBATCH --partition=compute        # <-- uncomment / set to your partition
+# #SBATCH --account=your_account     # <-- uncomment / set if required
 
 set -euo pipefail
+
+# DelftBlue / Lustre: HDF5 file locking is unsupported and triggers
+# "BlockingIOError: unable to lock file" -- disable it for every rank.
+export HDF5_USE_FILE_LOCKING=FALSE
 
 #--------------------------- environment --------------------------------------
 # Replace this block with however MEEP is provided on your machine.  Common
