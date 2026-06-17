@@ -57,11 +57,12 @@ if __name__ == "__main__":
     E_ind = E
 
     # transform + eq.1 assembly + broadening
-    E_eV = np.linspace(0.4, 1.0, 600)
+    E_eV = np.linspace(0.01, 1.0, 800)   # start near zero, not 0.4
     omegas = 2 * np.pi * eV_to_meep_freq(E_eV, a_nm)
     E_xw = temporal_ft(t, E_ind, omegas)
     gamma = assemble_gamma(E_xw, xs, omegas, beta, a_nm)
     gamma_conv = gaussian_convolve(E_eV, gamma, fwhm_eV=0.030)
 
-    np.savez("eels_vacuum.npz", E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv)
+    np.savez("eels_vacuum.npz", E_eV=E_eV, gamma=gamma, gamma_conv=gamma_conv,
+             t=t, xs=xs, E=E_ind, beta=beta)
     print("saved eels_vacuum.npz")
