@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, ".")
-from eels_brute_force import (
+from eels import (
     eV_to_meep_freq, temporal_ft_pade, assemble_gamma, gaussian_convolve,
 )
 

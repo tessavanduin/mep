@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 # import the transform + assembly from the main module
 sys.path.insert(0, ".")
-from eels_brute_force import (
+from eels import (
     eV_to_meep_freq, temporal_ft_pade, assemble_gamma, gaussian_convolve,
 )
 

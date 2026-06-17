@@ -12,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, ".")
-from eels_brute_force import eV_to_meep_freq, temporal_ft_pade
+from eels import eV_to_meep_freq, temporal_ft_pade
 
 files = sys.argv[1:]
 if not files:
